@@ -6,6 +6,13 @@
 
 ## [未发布]
 
+### 修复
+
+- **OpenAI Chat 流式路径丢失 usage 信息**
+  - `sdk.OpenAIChat.consumeStream` 原先只捕获 `FinishReason`，忽略了 chunk 中的 `Usage` 字段
+  - 在流式循环中新增 usage 提取逻辑：当 `chunk.Usage.TotalTokens > 0` 时赋值给 `lastUsage`
+  - 修复后 `runStream` 可正常输出 `[usage] prompt=... completion=... total=...`
+
 ### 新增
 
 - **Provider 默认配置迁移至 `provider.DefaultConfig()`** (`app/internal/llm/provider/` + `app/internal/config/`)

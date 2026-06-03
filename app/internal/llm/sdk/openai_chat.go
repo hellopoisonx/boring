@@ -373,6 +373,12 @@ func (p *OpenAIChat) consumeStream(ctx context.Context, stream *ssestream.Stream
 				lastFinish = mapChatFinishReason(c.FinishReason)
 			}
 		}
+
+		// 提取 usage（OpenAI 流式最后一个 chunk 可能带 usage；DeepSeek 需 stream_options.include_usage=true）
+		if chunk.Usage.TotalTokens > 0 {
+			lastUsage = usageFromPromptCompletion(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.TotalTokens)
+		}
+
 		// 整流：每个 chunk 立即 flush 文本以降低延迟
 		flushText()
 	}
