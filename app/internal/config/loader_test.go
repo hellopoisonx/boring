@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -209,5 +210,206 @@ func TestLoad_Watch_RequiresOnChange(t *testing.T) {
 	_, err := Load(path, Options{Watch: true})
 	if err == nil {
 		t.Fatal("Watch=true 但没传 OnConfigChange，应报错")
+	}
+}
+
+// TestLoad_Provider_FillsDefaults 验证仅写 provider + apiKey 时，
+// baseUrl / sdk / model.id 都自动用 provider 内置默认值填充。
+func TestLoad_Provider_FillsDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `provider: deepseek
+apiKey: sk-test
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader, err := Load(path, Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	t.Cleanup(func() { _ = loader.Close() })
+
+	cfg := loader.Config()
+	if cfg.Provider != ProviderDeepSeek {
+		t.Errorf("Provider = %q, want %q", cfg.Provider, ProviderDeepSeek)
+	}
+	if cfg.Sdk != SdkDeepSeek {
+		t.Errorf("Sdk = %q, want %q (provider.DefaultSdk)", cfg.Sdk, SdkDeepSeek)
+	}
+	if cfg.BaseURL.String() != "https://api.deepseek.com" {
+		t.Errorf("BaseURL = %q, want provider 内置默认", cfg.BaseURL.String())
+	}
+	if cfg.Model.ID != "deepseek-v4-flash" {
+		t.Errorf("Model.ID = %q, want provider.DefaultModel", cfg.Model.ID)
+	}
+}
+
+// TestLoad_Provider_BaseURLOverride 验证 provider 模式下，baseUrl 显式写可覆盖内置默认。
+func TestLoad_Provider_BaseURLOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `provider: openai
+baseUrl: https://my-proxy.example.com/v1
+apiKey: sk-test
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader, err := Load(path, Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	t.Cleanup(func() { _ = loader.Close() })
+
+	cfg := loader.Config()
+	if cfg.BaseURL.String() != "https://my-proxy.example.com/v1" {
+		t.Errorf("BaseURL = %q, want 显式覆盖生效", cfg.BaseURL.String())
+	}
+	// sdk / model.id 仍走 provider 默认
+	if cfg.Sdk != SdkOpenAIChat {
+		t.Errorf("Sdk = %q, want %q", cfg.Sdk, SdkOpenAIChat)
+	}
+	if cfg.Model.ID != "gpt-4o" {
+		t.Errorf("Model.ID = %q, want %q", cfg.Model.ID, "gpt-4o")
+	}
+}
+
+// TestLoad_Provider_OpenAIAllowsBothSdks 验证 openai provider 允许的 sdk 列表 {openai-chat, openai-response}。
+func TestLoad_Provider_OpenAIAllowsBothSdks(t *testing.T) {
+	cases := []struct {
+		sdk Sdk
+	}{
+		{SdkOpenAIChat},
+		{SdkOpenAIResponse},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.sdk), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			yaml := "provider: openai\nsdk: " + string(tc.sdk) + "\napiKey: sk-test\n"
+			if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			loader, err := Load(path, Options{})
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			t.Cleanup(func() { _ = loader.Close() })
+
+			if loader.Config().Sdk != tc.sdk {
+				t.Errorf("Sdk = %q, want %q", loader.Config().Sdk, tc.sdk)
+			}
+		})
+	}
+}
+
+// TestLoad_Provider_SdkConflict 验证显式 sdk 不在 provider 允许列表时 fail-fast。
+func TestLoad_Provider_SdkConflict(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `provider: openai
+sdk: anthropic-message
+apiKey: sk-test
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path, Options{})
+	if err == nil {
+		t.Fatal("provider=openai + sdk=anthropic-message 应 fail-fast")
+	}
+	if !strings.Contains(err.Error(), "不允许") {
+		t.Errorf("error = %v, want 包含「不允许」", err)
+	}
+}
+
+// TestLoad_Provider_Unknown 验证未识别的 provider 名字 fail-fast。
+func TestLoad_Provider_Unknown(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `provider: foo-bar
+apiKey: sk-test
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path, Options{})
+	if err == nil {
+		t.Fatal("未识别的 provider 应 fail-fast")
+	}
+	if !strings.Contains(err.Error(), "未识别") {
+		t.Errorf("error = %v, want 包含「未识别」", err)
+	}
+}
+
+// TestLoad_NoProvider_BackwardCompat 验证不写 provider 时维持老行为：
+// baseUrl / sdk 全部由用户手写，缺省走 Sdk.DefaultBaseURL()。
+func TestLoad_NoProvider_BackwardCompat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `baseUrl: https://api.example.com/v1
+apiKey: sk-test
+sdk: openai-response
+model:
+  id: gpt-4o
+  maxResponse: 2048
+  maxContext: 128000
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader, err := Load(path, Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	t.Cleanup(func() { _ = loader.Close() })
+
+	cfg := loader.Config()
+	if cfg.Provider != "" {
+		t.Errorf("Provider = %q, want empty (老路径)", cfg.Provider)
+	}
+	if cfg.Sdk != SdkOpenAIResponse {
+		t.Errorf("Sdk = %q, want %q", cfg.Sdk, SdkOpenAIResponse)
+	}
+	if cfg.BaseURL.String() != "https://api.example.com/v1" {
+		t.Errorf("BaseURL = %q, want 用户手写值", cfg.BaseURL.String())
+	}
+	if cfg.Model.ID != "gpt-4o" {
+		t.Errorf("Model.ID = %q, want 用户手写值", cfg.Model.ID)
+	}
+}
+
+// TestLoad_Provider_EnvOverridesProvider 验证 env 覆盖 provider 的 apiKey。
+func TestLoad_Provider_EnvOverridesProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `provider: openai
+apiKey: from-file
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TESTPROV_APIKEY", "from-env")
+
+	loader, err := Load(path, Options{EnvPrefix: "TESTPROV"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	t.Cleanup(func() { _ = loader.Close() })
+
+	if got := loader.Config().APIKey; got != "from-env" {
+		t.Errorf("APIKey = %q, want from-env (env > file)", got)
+	}
+	// provider 仍然被识别，model.id 走默认
+	if got := loader.Config().Model.ID; got != "gpt-4o" {
+		t.Errorf("Model.ID = %q, want provider 默认", got)
 	}
 }

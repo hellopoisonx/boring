@@ -45,6 +45,18 @@
   - `Sdk` 协议枚举：`openai-chat` / `openai-response` / `anthropic-message` / `deepseek`
   - `LLMConfig` / `Model` 结构 + `Sdk.DefaultBaseURL()` 缺省地址回退
   - 支持 `MaxResponse` / `MaxContext` 字段
+- **LLM Provider 内置预设** (`app/internal/config/config.go` + `loader.go`)
+  - 新增 `Provider` 枚举 (`openai` / `anthropic` / `deepseek`) 与 `providerSpecs` 内置表：
+    每个 provider 对应一组 (BaseURL, DefaultSdk, DefaultModel, AllowedSdks)
+  - `LLMConfig.Provider` 字段：选一个后未显式配置的 `baseUrl` / `sdk` / `model.id` 自动用
+    provider 默认值填充；显式 `baseUrl` 仍可覆盖（自建代理场景）
+  - 显式 `sdk` 必须落在 provider 允许的协议列表内，否则 fail-fast
+  - `Provider` 留空时维持老行为（手动指定 `sdk` + `baseUrl`）
+  - viper `IsSet` 语义在 SetDefault 之后会把 default 误判为「已 set」；用 SetDefault 之前
+    快照的 yaml 扁平 key 集合 (`flattenViperKeys`) 替代，保证「显式」判断可靠
+  - 同步更新默认模板 / `--provider` flag / `EnvPrefix_PROVIDER` env 绑定
+  - 新增 7 个测试：默认值填充、baseUrl 覆盖、允许的 sdk 列表、冲突 fail-fast、
+    未知 provider fail-fast、老路径兼容、env 与 provider 协同
 
 - **viper 配置加载器** (`app/internal/config/loader.go`)
   - `Load(path, Options)` 入口；零值 Options 即可工作

@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
@@ -38,7 +39,7 @@ type Options struct {
 	EnvPrefix string
 
 	// FlagSet 启用命令行 flag 覆盖；非 nil 时生效。
-	// 约定：--api-key / --sdk / --base-url / --model-id 等"扁平"key 与
+	// 约定：--api-key / --sdk / --base-url / --model-id / --provider 等"扁平"key 与
 	// [LLMConfig] 字段一一对应。复杂字段（model）走 --model-id 单独绑定。
 	FlagSet *pflag.FlagSet
 
@@ -127,7 +128,13 @@ func Load(path string, opts Options) (*Loader, error) {
 		return nil, fmt.Errorf("config: read %s: %w", abs, err)
 	}
 
+	// 在 SetDefault 之前快照 yaml 显式 key 集合。
+	// [resolveProviderDefaults] 需要可靠区分「yaml/env/flag 显式输入」与「程序 default 兜底」，
+	// viper 的 IsSet 在 SetDefault 后会把 default 误判为「已 set」，所以不能直接用。
+	yamlKeys := flattenViperKeys(v.AllSettings())
+
 	// 默认值：即使 yaml 里没写也能给出合理兜底
+	v.SetDefault("provider", "")
 	v.SetDefault("baseUrl", "")
 	v.SetDefault("apiKey", "")
 	v.SetDefault("sdk", SdkOpenAIChat)
@@ -140,6 +147,7 @@ func Load(path string, opts Options) (*Loader, error) {
 		v.SetEnvPrefix(opts.EnvPrefix)
 		v.AutomaticEnv()
 		// url.URL 走 string 中间层（key 是 baseUrl，下划线是 viper 默认替换策略）
+		_ = v.BindEnv("provider")
 		_ = v.BindEnv("baseUrl")
 		_ = v.BindEnv("apiKey")
 		_ = v.BindEnv("sdk")
@@ -154,6 +162,11 @@ func Load(path string, opts Options) (*Loader, error) {
 	cfg, err := unmarshalLLMConfig(v)
 	if err != nil {
 		return nil, fmt.Errorf("config: unmarshal: %w", err)
+	}
+
+	// Provider 预设下填默认值 + 校验 sdk 一致性。失败即 fail-fast。
+	if err := resolveProviderDefaults(v, yamlKeys, cfg); err != nil {
+		return nil, fmt.Errorf("config: resolve provider defaults: %w", err)
 	}
 
 	l := &Loader{
@@ -191,6 +204,71 @@ func unmarshalLLMConfig(v *viper.Viper) (*LLMConfig, error) {
 	return &cfg, nil
 }
 
+// resolveProviderDefaults 用 [LLMConfig.Provider] 填充 baseUrl / sdk / model.id 的缺省值，
+// 并校验显式指定的 sdk 是否落在 provider 允许的协议列表内。
+//
+// yamlKeys 是从 yaml 原始内容拍平的扁平 key 集合 (例如 "model.id")，用于可靠区分
+// 「用户显式输入」与「程序 default 兜底」——viper 的 IsSet 在 SetDefault 之后会把 default
+// 误判为「已 set」，所以这里直接用 yaml 显式 key 集合做判据。
+//
+// Provider 为空时（未启用 provider 字段）函数 no-op，
+// 保留原有"通过 sdk + baseUrl 手写"的行为。fail-fast 错误会以 config: 前缀返回。
+func resolveProviderDefaults(_ *viper.Viper, yamlKeys map[string]bool, cfg *LLMConfig) error {
+	if cfg.Provider == "" {
+		return nil
+	}
+	spec, ok := cfg.Provider.Spec()
+	if !ok {
+		return fmt.Errorf("未识别的 provider %q（可用: openai / anthropic / deepseek）", cfg.Provider)
+	}
+
+	// 1. baseUrl：未显式配置时回退到 provider 的官方默认。Host 为零值即视为"未配置"。
+	if cfg.BaseURL.Host == "" {
+		u, err := url.Parse(spec.BaseURL)
+		if err != nil {
+			return fmt.Errorf("provider %q 内置 baseUrl 解析失败: %w", cfg.Provider, err)
+		}
+		cfg.BaseURL = *u
+	}
+
+	// 2. sdk：未显式配置时回退到 provider 的默认协议；显式配置时必须落在 AllowedSdks 内，否则 fail-fast。
+	//    yamlKeys 是"yaml 显式"集合；env / flag 覆盖当前不参与显式判定（直接走 viper 已解析值）。
+	if !yamlKeys["sdk"] {
+		cfg.Sdk = spec.DefaultSdk
+	} else if !slices.Contains(spec.AllowedSdks, cfg.Sdk) {
+		return fmt.Errorf("provider %q 不允许 sdk=%q（允许: %v）", cfg.Provider, cfg.Sdk, spec.AllowedSdks)
+	}
+
+	// 3. model.id：未显式配置时回退到 provider 的默认模型。
+	if cfg.Model.ID == "" {
+		cfg.Model.ID = spec.DefaultModel
+	}
+
+	return nil
+}
+
+// flattenViperKeys 把 viper 的 [AllSettings] map 拍平为扁平 key 集合（用 "." 分隔嵌套层）。
+// 仅用于在 SetDefault / BindEnv / BindPFlag 之前快照 yaml 显式包含的 key，
+// 供 [resolveProviderDefaults] 判断「yaml 显式」与「程序兜底」用。
+func flattenViperKeys(m map[string]any) map[string]bool {
+	out := map[string]bool{}
+	flattenInto(m, "", out)
+	return out
+}
+
+func flattenInto(m map[string]any, prefix string, out map[string]bool) {
+	for k, v := range m {
+		key := k
+		if prefix != "" {
+			key = prefix + "." + k
+		}
+		out[key] = true
+		if vm, ok := v.(map[string]any); ok {
+			flattenInto(vm, key, out)
+		}
+	}
+}
+
 // stringToURLHook 在 mapstructure 解析时把 string 喂给 url.URL 字段。
 // yaml 里 baseUrl 是 string（人类可写），结构体里是 url.URL（程序可操作）。
 func stringToURLHook() mapstructure.DecodeHookFunc {
@@ -224,6 +302,7 @@ func bindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 		name string
 		help string
 	}{
+		{"provider", "provider", "LLM provider 内置预设: openai / anthropic / deepseek"},
 		{"baseUrl", "base-url", "LLM provider base URL"},
 		{"apiKey", "api-key", "LLM provider API key"},
 		{"sdk", "sdk", "SDK 协议: openai-chat / openai-response / anthropic-message / deepseek"},
@@ -302,6 +381,12 @@ func (l *Loader) reloadAndNotify(onChange func(*LLMConfig)) {
 	if err != nil {
 		return
 	}
+	// 重新收集 yaml 显式 key 集合（同 Load 路径），保证热加载与首次加载行为一致
+	yamlKeys := flattenViperKeys(l.loader.AllSettings())
+	if err := resolveProviderDefaults(l.loader, yamlKeys, cfg); err != nil {
+		// 解析后 provider 校验失败同样保留旧值，避免热加载把线上服务搞坏
+		return
+	}
 	l.mu.Lock()
 	l.cfg = cfg
 	l.mu.Unlock()
@@ -314,12 +399,15 @@ const defaultTemplateYAML = `# boring 配置文件
 # 字段说明见 app/internal/config/config.go
 # 优先级：命令行 flag > 环境变量 (EnvPrefix_*) > 本文件
 
-baseUrl: https://api.openai.com/v1  # LLM provider 地址；留空走 Sdk.DefaultBaseURL()
-apiKey: sk-replace-me                # LLM provider API key
-sdk: openai-chat                     # openai-chat | openai-response | anthropic-message | deepseek
+# 程序内置的 LLM 厂商预设。选一个后，未显式配置的 baseUrl / sdk / model.id 会用 provider 的默认值填充；
+# 显式 baseUrl 仍可覆盖（自建代理场景）；显式 sdk 必须落在该 provider 允许的协议列表内，否则 fail-fast。
+provider: openai                # openai | anthropic | deepseek | 留空走老路径（手动指定 sdk + baseUrl）
+#baseUrl: https://api.openai.com/v1  # 可选；留空走 provider / Sdk.DefaultBaseURL() 默认
+apiKey: sk-replace-me          # LLM provider API key
+#sdk: openai-chat               # openai-chat | openai-response | anthropic-message | deepseek
 model:
-  name: GPT-4o                       # 仅展示用，不参与请求
-  id: gpt-4o                         # 实际下发给 provider 的模型 ID
-  maxResponse: 1024                  # 单次响应 token 上限；0 走 provider 兜底
-  maxContext: 128000                 # 上下文窗口大小；0 表示不限制
+#  name: GPT-4o                 # 仅展示用，不参与请求
+  id: gpt-4o                   # 实际下发给 provider 的模型 ID；留空走 provider 默认
+#  maxResponse: 1024            # 单次响应 token 上限；0 走 provider 兜底
+#  maxContext: 128000           # 上下文窗口大小；0 表示不限制
 `

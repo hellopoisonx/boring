@@ -180,3 +180,20 @@ llm:
 ```
 
 `NewLLM(cfg)` 工厂自动派发到对应 Provider；统一 `llm.GenerateRequest` 跨协议无差异。
+
+### 用 `provider` 预设代替手写 baseUrl / sdk / model.id
+
+`config.yaml` 支持 `provider` 字段，是程序内置的 LLM 厂商预设（`openai` / `anthropic` /
+`deepseek`）。选一个后未显式配置的 `baseUrl` / `sdk` / `model.id` 会自动用 provider 的
+内置默认值填充；显式 `baseUrl` 仍可覆盖（自建代理场景）；显式 `sdk` 必须落在该
+provider 允许的协议列表内，否则 fail-fast。
+
+```yaml
+llm:
+  provider: deepseek           # openai | anthropic | deepseek
+  apiKey: sk-...
+  # baseUrl / sdk / model.id 全部走 provider 内置默认
+```
+
+底层表在 `app/internal/config/config.go::providerSpecs`；增删 provider 需同步更新
+该表与 [LLMConfig] 默认模板注释。
