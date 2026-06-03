@@ -11,6 +11,7 @@ const (
 	SdkOpenAIChat       Sdk = "openai-chat"
 	SdkOpenAIResponse   Sdk = "openai-response"
 	SdkAnthropicMessage Sdk = "anthropic-message"
+	SdkDeepSeek         Sdk = "deepseek"
 )
 
 // DefaultBaseURL 返回指定 SDK 协议对应的官方默认 BaseURL。
@@ -21,6 +22,10 @@ func (s Sdk) DefaultBaseURL() string {
 		return "https://api.openai.com/v1"
 	case SdkAnthropicMessage:
 		return "https://api.anthropic.com"
+	case SdkDeepSeek:
+		// DeepSeek 官方 base URL 不含 /v1 前缀（与 OpenAI 不同），
+		// openai-go SDK 的 WithBaseURL 会自动处理路径斜杠。
+		return "https://api.deepseek.com"
 	}
 	return ""
 }

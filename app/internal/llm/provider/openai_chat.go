@@ -49,7 +49,7 @@ func (p *OpenAIChat) Generate(ctx context.Context, req llm.GenerateRequest) (*ll
 	if err != nil {
 		return nil, wrapError(p.cfg, err)
 	}
-	return p.parseResponse(resp)
+	return parseChatResponse(string(p.cfg.Sdk), resp)
 }
 
 // GenerateWithStream 流式调用；通过 [asyncrw.AsyncReader] 暴露 [llm.StreamChunk]。
@@ -221,10 +221,13 @@ func convertToolsChat(tools []llm.ToolInfo) ([]openai.ChatCompletionToolUnionPar
 	return out, nil
 }
 
-// parseResponse 把非流式响应转换为 [llm.Message]。
-func (p *OpenAIChat) parseResponse(resp *openai.ChatCompletion) (*llm.Message, error) {
+// parseChatResponse 把 Chat Completions 协议的非流式响应转换为 [llm.Message]。
+//
+// 是 free function（不依赖 receiver），便于 DeepSeek 等同协议族 provider 直接复用。
+// provider 字符串仅在异常路径（LLM 未返回 choice）时用于构造 [llm.Error.Provider]。
+func parseChatResponse(provider string, resp *openai.ChatCompletion) (*llm.Message, error) {
 	if len(resp.Choices) == 0 {
-		return nil, &llm.Error{Provider: string(p.cfg.Sdk), Message: "LLM 未返回任何 choice"}
+		return nil, &llm.Error{Provider: provider, Message: "LLM 未返回任何 choice"}
 	}
 	choice := resp.Choices[0]
 	msg := choice.Message
@@ -355,7 +358,10 @@ func (p *OpenAIChat) consumeStream(ctx context.Context, stream *ssestream.Stream
 	emitFinish(lastFinish, lastUsage)
 }
 
-// mapChatFinishReason 把 openai 的 FinishReason 字符串映射为 [llm.FinishReason]。
+// mapChatFinishReason 把 OpenAI / DeepSeek 等 Chat Completions 协议族的
+// FinishReason 字符串映射为 [llm.FinishReason]。
+//
+// 包含 DeepSeek 特有的 `insufficient_system_resource`（系统推理资源不足）。
 func mapChatFinishReason(s string) llm.FinishReason {
 	switch s {
 	case "stop":
@@ -366,6 +372,8 @@ func mapChatFinishReason(s string) llm.FinishReason {
 		return llm.FinishReasonLength
 	case "content_filter":
 		return llm.FinishReasonContentFilter
+	case "insufficient_system_resource":
+		return llm.FinishReasonError
 	}
 	return llm.FinishReason(s)
 }

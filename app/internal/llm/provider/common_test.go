@@ -75,11 +75,12 @@ func TestWrapError(t *testing.T) {
 // TestMapChatFinishReason 验证 openai Chat finish_reason → llm.FinishReason 映射。
 func TestMapChatFinishReason(t *testing.T) {
 	cases := map[string]llm.FinishReason{
-		"stop":           llm.FinishReasonStop,
-		"tool_calls":     llm.FinishReasonToolCalls,
-		"length":         llm.FinishReasonLength,
-		"content_filter": llm.FinishReasonContentFilter,
-		"unknown":        llm.FinishReason("unknown"),
+		"stop":                         llm.FinishReasonStop,
+		"tool_calls":                   llm.FinishReasonToolCalls,
+		"length":                       llm.FinishReasonLength,
+		"content_filter":               llm.FinishReasonContentFilter,
+		"insufficient_system_resource": llm.FinishReasonError, // DeepSeek 特有
+		"unknown":                      llm.FinishReason("unknown"),
 	}
 	for in, want := range cases {
 		if got := mapChatFinishReason(in); got != want {
