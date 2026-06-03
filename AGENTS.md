@@ -67,10 +67,9 @@
 ### 2.5 配置
 - LLMConfig / Model / Sdk 枚举 / Provider 枚举 →
   [`app/internal/config/config.go`](./app/internal/config/config.go)
-  - `Provider.Spec() (providerSpec, bool)`：返回该 provider 的内置默认 spec
-  - `Provider.AllowsSdk(s Sdk) bool`：该 provider 是否允许指定 sdk
+  - 各 provider 的 `DefaultConfig()` 定义完整默认配置，通过 `init()` 注册到 `config.RegisterProviderDefaults`
+  - `Provider.AllowsSdk(s Sdk) bool`：该 provider 是否允许指定 sdk（委托注册表）
   - `Sdk.DefaultBaseURL() string`：sdk 协议官方默认 BaseURL
-  - `providerSpecs` 表：openai / anthropic / deepseek 三个内置厂商预设
 - viper 配置加载器（flag/env/file 三层优先级 + fsnotify 热加载）→
   [`app/internal/config/loader.go`](./app/internal/config/loader.go)
 ### 2.6 持久化层

@@ -213,38 +213,86 @@ func unmarshalLLMConfig(v *viper.Viper) (*LLMConfig, error) {
 //
 // Provider 为空时（未启用 provider 字段）函数 no-op，
 // 保留原有"通过 sdk + baseUrl 手写"的行为。fail-fast 错误会以 config: 前缀返回。
+//
+// 内部通过 [getProviderDefaultConfig] / [getAllowedSdks] 获取 provider 的默认配置；
+// 这些值由 provider 包在其 init() 中通过 [RegisterProviderDefaults] 注册，
+// 从而避免 config → provider 的导入循环。
 func resolveProviderDefaults(_ *viper.Viper, yamlKeys map[string]bool, cfg *LLMConfig) error {
 	if cfg.Provider == "" {
 		return nil
 	}
-	spec, ok := cfg.Provider.Spec()
+
+	defaultCfg, ok := getProviderDefaultConfig(cfg.Provider)
 	if !ok {
 		return fmt.Errorf("未识别的 provider %q（可用: openai / anthropic / deepseek）", cfg.Provider)
 	}
 
 	// 1. baseUrl：未显式配置时回退到 provider 的官方默认。Host 为零值即视为"未配置"。
 	if cfg.BaseURL.Host == "" {
-		u, err := url.Parse(spec.BaseURL)
-		if err != nil {
-			return fmt.Errorf("provider %q 内置 baseUrl 解析失败: %w", cfg.Provider, err)
-		}
-		cfg.BaseURL = *u
+		cfg.BaseURL = defaultCfg.BaseURL
 	}
 
 	// 2. sdk：未显式配置时回退到 provider 的默认协议；显式配置时必须落在 AllowedSdks 内，否则 fail-fast。
 	//    yamlKeys 是"yaml 显式"集合；env / flag 覆盖当前不参与显式判定（直接走 viper 已解析值）。
 	if !yamlKeys["sdk"] {
-		cfg.Sdk = spec.DefaultSdk
-	} else if !slices.Contains(spec.AllowedSdks, cfg.Sdk) {
-		return fmt.Errorf("provider %q 不允许 sdk=%q（允许: %v）", cfg.Provider, cfg.Sdk, spec.AllowedSdks)
+		cfg.Sdk = defaultCfg.Sdk
+	} else {
+		allowed, ok := getAllowedSdks(cfg.Provider)
+		if !ok {
+			return fmt.Errorf("未识别的 provider %q（可用: openai / anthropic / deepseek）", cfg.Provider)
+		}
+		if !slices.Contains(allowed, cfg.Sdk) {
+			return fmt.Errorf("provider %q 不允许 sdk=%q（允许: %v）", cfg.Provider, cfg.Sdk, allowed)
+		}
 	}
 
 	// 3. model.id：未显式配置时回退到 provider 的默认模型。
 	if cfg.Model.ID == "" {
-		cfg.Model.ID = spec.DefaultModel
+		cfg.Model.ID = defaultCfg.Model.ID
 	}
 
 	return nil
+}
+
+// ── Provider 默认配置注册表 ──────────────────────────────────────────
+//
+// provider 包在其 init() 中通过 [RegisterProviderDefaults] 注册各 provider
+// 的默认配置及允许的 Sdk 列表，[resolveProviderDefaults] 通过
+// [getProviderDefaultConfig] / [getAllowedSdks] 读取。
+//
+// 这是为了打破 config ↔ provider 的导入循环：config 包不 import provider，
+// 而是由 provider 包主动注册自身信息到 config 包的内部注册表。
+// ─────────────────────────────────────────────────────────────────────
+
+var (
+	providerDefaultMu     sync.RWMutex
+	providerDefaultConfig = map[Provider]LLMConfig{}
+	providerAllowedSdks   = map[Provider][]Sdk{}
+)
+
+// RegisterProviderDefaults 供 provider 包注册该 provider 的默认 LLMConfig
+// 及允许的 Sdk 列表。多次注册同一 provider 会覆盖前值（最后注册胜出）。
+//
+// 应在 init() 中调用。
+func RegisterProviderDefaults(p Provider, defaultCfg LLMConfig, allowed []Sdk) {
+	providerDefaultMu.Lock()
+	defer providerDefaultMu.Unlock()
+	providerDefaultConfig[p] = defaultCfg
+	providerAllowedSdks[p] = allowed
+}
+
+func getProviderDefaultConfig(p Provider) (LLMConfig, bool) {
+	providerDefaultMu.RLock()
+	defer providerDefaultMu.RUnlock()
+	cfg, ok := providerDefaultConfig[p]
+	return cfg, ok
+}
+
+func getAllowedSdks(p Provider) ([]Sdk, bool) {
+	providerDefaultMu.RLock()
+	defer providerDefaultMu.RUnlock()
+	allowed, ok := providerAllowedSdks[p]
+	return allowed, ok
 }
 
 // flattenViperKeys 把 viper 的 [AllSettings] map 拍平为扁平 key 集合（用 "." 分隔嵌套层）。

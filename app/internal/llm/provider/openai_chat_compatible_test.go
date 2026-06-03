@@ -16,21 +16,27 @@ func TestOpenAIChatCompatible_ImplementsLLM(t *testing.T) {
 
 // TestOpenAIChatCompatible_DefaultConfig 验证 DefaultConfig 返回的 name 与 cfg。
 //
-// 语义：name 等于 [config.SdkOpenAIChat] 字符串，cfg 只填 Sdk 字段，其他零值。
+// cfg 填充该 provider 的完整默认值（Provider / Sdk / BaseURL / Model.ID），APIKey 留空。
 func TestOpenAIChatCompatible_DefaultConfig(t *testing.T) {
 	p := NewOpenAIChatCompatible(config.LLMConfig{Sdk: config.SdkOpenAIChat})
 	name, cfg := p.DefaultConfig()
 	if name != string(config.SdkOpenAIChat) {
 		t.Errorf("name = %q, want %q", name, config.SdkOpenAIChat)
 	}
+	if cfg.Provider != config.ProviderOpenAI {
+		t.Errorf("cfg.Provider = %q, want %q", cfg.Provider, config.ProviderOpenAI)
+	}
 	if cfg.Sdk != config.SdkOpenAIChat {
 		t.Errorf("cfg.Sdk = %q, want %q", cfg.Sdk, config.SdkOpenAIChat)
 	}
 	if cfg.APIKey != "" {
-		t.Errorf("cfg.APIKey = %q, want empty (DefaultConfig 应只填 Sdk 字段)", cfg.APIKey)
+		t.Errorf("cfg.APIKey = %q, want empty", cfg.APIKey)
 	}
-	if cfg.BaseURL.Host != "" {
-		t.Errorf("cfg.BaseURL = %q, want empty (DefaultConfig 应只填 Sdk 字段)", cfg.BaseURL.String())
+	if cfg.BaseURL.String() != "https://api.openai.com/v1" {
+		t.Errorf("cfg.BaseURL = %q, want %q", cfg.BaseURL.String(), "https://api.openai.com/v1")
+	}
+	if cfg.Model.ID != "gpt-4o" {
+		t.Errorf("cfg.Model.ID = %q, want %q", cfg.Model.ID, "gpt-4o")
 	}
 }
 

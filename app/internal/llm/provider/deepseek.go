@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"net/url"
 
 	"github.com/hellopoisonx/boring/app/internal/config"
 	"github.com/hellopoisonx/boring/app/internal/llm"
@@ -65,10 +66,16 @@ func (p *DeepSeekChat) GenerateWithStream(ctx context.Context, req llm.GenerateR
 	return p.sdk.GenerateWithStream(ctx, req)
 }
 
-// DefaultConfig 返回该 provider 的标识名与零值默认配置。
+// DefaultConfig 返回该 provider 的标识名与默认配置。
 //
 // DeepSeek 不是 SDK 的 wrapper（直连 openai-go 改为 SDK 委托后仍持 cfg 便于扩展），
-// 但为满足 [llm.LLM] 接口契约，DefaultConfig 仍按"name=Sdk 字符串, cfg 只填 Sdk 字段"统一语义返回。
+// 但为满足 [llm.LLM] 接口契约，DefaultConfig 返回该 provider 的完整默认值。
 func (p *DeepSeekChat) DefaultConfig() (string, config.LLMConfig) {
-	return string(config.SdkDeepSeek), config.LLMConfig{Sdk: config.SdkDeepSeek}
+	u, _ := url.Parse("https://api.deepseek.com")
+	return string(config.SdkDeepSeek), config.LLMConfig{
+		Provider: config.ProviderDeepSeek,
+		Sdk:      config.SdkDeepSeek,
+		BaseURL:  *u,
+		Model:    config.Model{ID: "deepseek-v4-flash"},
+	}
 }

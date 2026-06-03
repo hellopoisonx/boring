@@ -12,6 +12,36 @@ import (
 	"github.com/spf13/pflag"
 )
 
+
+// 注册 provider 默认配置，模拟 provider 包的 init() 行为。
+// 注意：这些值与 provider.DefaultConfig() 的返回值保持同步；
+// 生产环境由 provider 包的 init() 实际注册。
+func init() {
+	u, _ := url.Parse("https://api.openai.com/v1")
+	RegisterProviderDefaults(ProviderOpenAI, LLMConfig{
+		Provider: ProviderOpenAI,
+		Sdk:      SdkOpenAIChat,
+		BaseURL:  *u,
+		Model:    Model{ID: "gpt-4o"},
+	}, []Sdk{SdkOpenAIChat, SdkOpenAIResponse})
+
+	u, _ = url.Parse("https://api.anthropic.com")
+	RegisterProviderDefaults(ProviderAnthropic, LLMConfig{
+		Provider: ProviderAnthropic,
+		Sdk:      SdkAnthropicMessage,
+		BaseURL:  *u,
+		Model:    Model{ID: "claude-3-5-sonnet-20241022"},
+	}, []Sdk{SdkAnthropicMessage})
+
+	u, _ = url.Parse("https://api.deepseek.com")
+	RegisterProviderDefaults(ProviderDeepSeek, LLMConfig{
+		Provider: ProviderDeepSeek,
+		Sdk:      SdkDeepSeek,
+		BaseURL:  *u,
+		Model:    Model{ID: "deepseek-v4-flash"},
+	}, []Sdk{SdkDeepSeek})
+}
+
 const sampleYAML = `
 baseUrl: https://api.example.com/v1
 apiKey: test-key

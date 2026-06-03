@@ -362,3 +362,29 @@ func TestDeepSeekChat_FinishReason(t *testing.T) {
 		t.Errorf("MsgType = %s, want Assistant", msg.MsgType)
 	}
 }
+
+// TestDeepSeekChat_DefaultConfig 验证 DefaultConfig 返回的 name 与 cfg。
+//
+// cfg 填充该 provider 的完整默认值（Provider / Sdk / BaseURL / Model.ID），APIKey 留空。
+func TestDeepSeekChat_DefaultConfig(t *testing.T) {
+	p := NewDeepSeekChat(config.LLMConfig{Sdk: config.SdkDeepSeek})
+	name, cfg := p.DefaultConfig()
+	if name != string(config.SdkDeepSeek) {
+		t.Errorf("name = %q, want %q", name, config.SdkDeepSeek)
+	}
+	if cfg.Provider != config.ProviderDeepSeek {
+		t.Errorf("cfg.Provider = %q, want %q", cfg.Provider, config.ProviderDeepSeek)
+	}
+	if cfg.Sdk != config.SdkDeepSeek {
+		t.Errorf("cfg.Sdk = %q, want %q", cfg.Sdk, config.SdkDeepSeek)
+	}
+	if cfg.APIKey != "" {
+		t.Errorf("cfg.APIKey = %q, want empty", cfg.APIKey)
+	}
+	if cfg.BaseURL.String() != "https://api.deepseek.com" {
+		t.Errorf("cfg.BaseURL = %q, want %q", cfg.BaseURL.String(), "https://api.deepseek.com")
+	}
+	if cfg.Model.ID != "deepseek-v4-flash" {
+		t.Errorf("cfg.Model.ID = %q, want %q", cfg.Model.ID, "deepseek-v4-flash")
+	}
+}

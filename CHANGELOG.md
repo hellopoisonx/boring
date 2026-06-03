@@ -8,6 +8,12 @@
 
 ### 新增
 
+- **Provider 默认配置迁移至 `provider.DefaultConfig()`** (`app/internal/llm/provider/` + `app/internal/config/`)
+  - 各 provider 的 `DefaultConfig()` 从仅返回 `Sdk` 扩展为返回完整默认配置（Provider / BaseURL / Model.ID）
+  - provider 包通过 `init()` 将默认配置注册到 config 包的内部注册表（`RegisterProviderDefaults`），打破 config ↔ provider 导入循环
+  - `config.providerSpec` / `providerSpecs` / `Provider.Spec()` 已移除
+  - `loader.go` 的 `resolveProviderDefaults()` 从注册表读取默认配置
+  - `Provider.AllowsSdk()` 改为委托注册表实现
 - **三种 SDK 兼容 provider** (`app/internal/llm/provider/`)
   - `OpenAIChatCompatible` / `OpenAIResponseCompatible` / `AnthropicMessageCompatible`：
     分别包装 [sdk.OpenAIChat] / [sdk.OpenAIResponse] / [sdk.AnthropicMessage]，

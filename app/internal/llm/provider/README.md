@@ -213,5 +213,4 @@ llm:
   # baseUrl / sdk / model.id 全部走 provider 内置默认
 ```
 
-底层表在 `app/internal/config/config.go::providerSpecs`；增删 provider 需同步更新
-该表与 [LLMConfig] 默认模板注释。
+底层默认配置由各 provider 的 `DefaultConfig()` 定义，provider 包在 `init()` 中通过 `config.RegisterProviderDefaults` 注册。

@@ -15,20 +15,28 @@ func TestAnthropicMessageCompatible_ImplementsLLM(t *testing.T) {
 }
 
 // TestAnthropicMessageCompatible_DefaultConfig 验证 DefaultConfig 返回的 name 与 cfg。
+//
+// cfg 填充该 provider 的完整默认值（Provider / Sdk / BaseURL / Model.ID），APIKey 留空。
 func TestAnthropicMessageCompatible_DefaultConfig(t *testing.T) {
 	p := NewAnthropicMessageCompatible(config.LLMConfig{Sdk: config.SdkAnthropicMessage})
 	name, cfg := p.DefaultConfig()
 	if name != string(config.SdkAnthropicMessage) {
 		t.Errorf("name = %q, want %q", name, config.SdkAnthropicMessage)
 	}
+	if cfg.Provider != config.ProviderAnthropic {
+		t.Errorf("cfg.Provider = %q, want %q", cfg.Provider, config.ProviderAnthropic)
+	}
 	if cfg.Sdk != config.SdkAnthropicMessage {
 		t.Errorf("cfg.Sdk = %q, want %q", cfg.Sdk, config.SdkAnthropicMessage)
 	}
 	if cfg.APIKey != "" {
-		t.Errorf("cfg.APIKey = %q, want empty (DefaultConfig 应只填 Sdk 字段)", cfg.APIKey)
+		t.Errorf("cfg.APIKey = %q, want empty", cfg.APIKey)
 	}
-	if cfg.BaseURL.Host != "" {
-		t.Errorf("cfg.BaseURL = %q, want empty", cfg.BaseURL.String())
+	if cfg.BaseURL.String() != "https://api.anthropic.com" {
+		t.Errorf("cfg.BaseURL = %q, want %q", cfg.BaseURL.String(), "https://api.anthropic.com")
+	}
+	if cfg.Model.ID != "claude-3-5-sonnet-20241022" {
+		t.Errorf("cfg.Model.ID = %q, want %q", cfg.Model.ID, "claude-3-5-sonnet-20241022")
 	}
 }
 

@@ -7,6 +7,7 @@ package provider
 
 import (
 	"context"
+	"net/url"
 
 	"github.com/hellopoisonx/boring/app/internal/config"
 	"github.com/hellopoisonx/boring/app/internal/llm"
@@ -37,11 +38,17 @@ func (p *AnthropicMessageCompatible) GenerateWithStream(ctx context.Context, req
 	return p.sdk.GenerateWithStream(ctx, req)
 }
 
-// DefaultConfig 返回该 provider 的标识名与零值默认配置。
+// DefaultConfig 返回该 provider 的标识名与默认配置。
 //
 // 语义：name 等于 [config.Sdk] 字符串（"anthropic-message"），与"协议名"对齐；
-// cfg 只填 [config.LLMConfig.Sdk] 字段，其他（BaseURL / APIKey / Model）全部零值，
-// 由调用方按需填入。
+// cfg 填充该 provider 的完整默认值（Provider / Sdk / BaseURL / Model.ID），
+// APIKey 留空由调用方填入。
 func (p *AnthropicMessageCompatible) DefaultConfig() (string, config.LLMConfig) {
-	return string(config.SdkAnthropicMessage), config.LLMConfig{Sdk: config.SdkAnthropicMessage}
+	u, _ := url.Parse("https://api.anthropic.com")
+	return string(config.SdkAnthropicMessage), config.LLMConfig{
+		Provider: config.ProviderAnthropic,
+		Sdk:      config.SdkAnthropicMessage,
+		BaseURL:  *u,
+		Model:    config.Model{ID: "claude-3-5-sonnet-20241022"},
+	}
 }
