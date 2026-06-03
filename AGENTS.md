@@ -31,16 +31,16 @@
 
 ### 2.2 Provider 适配层
 
-- 三家协议共享逻辑（client 构造、错误归一化、Schema 解析） →
-  [`app/internal/llm/provider/common.go`](./app/internal/llm/provider/common.go)
-- OpenAI Chat Completions →
-  [`app/internal/llm/provider/openai_chat.go`](./app/internal/llm/provider/openai_chat.go)
-- OpenAI Responses →
-  [`app/internal/llm/provider/openai_response.go`](./app/internal/llm/provider/openai_response.go)
-- Anthropic Messages →
-  [`app/internal/llm/provider/anthropic_message.go`](./app/internal/llm/provider/anthropic_message.go)
-- DeepSeek（OpenAI 兼容 Chat Completions）→
+- OpenAI Chat Completions 兼容 provider（委托 sdk.OpenAIChat） →
+  [`app/internal/llm/provider/openai_chat_compatible.go`](./app/internal/llm/provider/openai_chat_compatible.go)
+- OpenAI Responses 兼容 provider（委托 sdk.OpenAIResponse） →
+  [`app/internal/llm/provider/openai_response_compatible.go`](./app/internal/llm/provider/openai_response_compatible.go)
+- Anthropic Messages 兼容 provider（委托 sdk.AnthropicMessage） →
+  [`app/internal/llm/provider/anthropic_message_compatible.go`](./app/internal/llm/provider/anthropic_message_compatible.go)
+- DeepSeek（OpenAI 兼容 Chat Completions，委托 sdk.OpenAIChat + `.WithStreamIncludeUsage()`）→
   [`app/internal/llm/provider/deepseek.go`](./app/internal/llm/provider/deepseek.go)
+- 跨协议 LLM 工厂 `provider.NewLLM(cfg) llm.LLM` →
+  [`app/internal/llm/provider/llm.go`](./app/internal/llm/provider/llm.go)
 
 ### 2.3 内置文件工具
 
@@ -65,8 +65,14 @@
   [`app/shared/asyncrw/asyncrw.go`](./app/shared/asyncrw/asyncrw.go)
 
 ### 2.5 配置
-- LLMConfig / Model / Sdk 枚举 → [`app/internal/config/config.go`](./app/internal/config/config.go)
-
+- LLMConfig / Model / Sdk 枚举 / Provider 枚举 →
+  [`app/internal/config/config.go`](./app/internal/config/config.go)
+  - `Provider.Spec() (providerSpec, bool)`：返回该 provider 的内置默认 spec
+  - `Provider.AllowsSdk(s Sdk) bool`：该 provider 是否允许指定 sdk
+  - `Sdk.DefaultBaseURL() string`：sdk 协议官方默认 BaseURL
+  - `providerSpecs` 表：openai / anthropic / deepseek 三个内置厂商预设
+- viper 配置加载器（flag/env/file 三层优先级 + fsnotify 热加载）→
+  [`app/internal/config/loader.go`](./app/internal/config/loader.go)
 ### 2.6 持久化层
 - `*Store` / `Open` / 三表 DDL → [`app/internal/store/store.go`](./app/internal/store/store.go) + [`schema.sql`](./app/internal/store/schema.sql)
 - `UserTenantStore` / `Create` / `GetByUserID` / `GetByTenantID` → [`app/internal/store/user_tenant.go`](./app/internal/store/user_tenant.go)
@@ -77,7 +83,22 @@
 
 ### 2.7 入口
 - 调试脚本（**非产品代码**）→ [`main.go`](./main.go)
-- 未来 CLI 入口占位 → [`cmd/`](./cmd/)
+- `cmd/chat` 单轮对话 CLI 入口 → [`app/cmd/chat/chat.go`](./app/cmd/chat/chat.go)
+  - **物理位置在 `app/cmd/chat/` 而非根 `cmd/`**：
+    Go `internal` 规则限制 `app/internal/...` 只能被 `app/...` 子树访问
+    （参见 [Go 官方文档](https://pkg.go.dev/cmd/go#hdr-Internal_Directories)）。
+    所有需要调用 `app/internal/...` 的可执行程序都应放在 `app/cmd/<name>/` 下。
+  - LLM 配置走 [`app/internal/config`](./app/internal/config/) 统一收口，
+    三层优先级：flag > env (`BORING_*`) > file
+
+### 2.8 单轮 chat agent
+- `agent.Chat` / `ChatOptions` / `NewChat` / `Reply` / `ReplyStream` /
+  `ErrEmptyPrompt` / `ErrToolCallNotSupported` →
+  [`app/internal/agent/chat.go`](./app/internal/agent/chat.go)
+- 原则：不维护会话历史、不压缩上下文、不读取跨会话记忆；
+  多轮 / 工具调用 / 记忆场景请直接使用 [`llm.LLM`](./app/internal/llm/types.go) 接口由调用方编排
+- 配套测试：fake LLM（不依赖外部 HTTP）→
+  [`app/internal/agent/chat_test.go`](./app/internal/agent/chat_test.go)
 
 ---
 
@@ -88,6 +109,9 @@
 - 工具测试 →
   [`app/internal/llm/tools/builtin/`](./app/internal/llm/tools/builtin/)
 - 存储层集成测试 → [`app/internal/store/store_test.go`](./app/internal/store/store_test.go)
+- 单轮 chat agent 测试（fake LLM，不依赖外部 HTTP）→
+  [`app/internal/agent/chat_test.go`](./app/internal/agent/chat_test.go)
+- 配置加载器测试 → [`app/internal/config/loader_test.go`](./app/internal/config/loader_test.go)
 
 ### 3.1 测试命令
 
@@ -126,6 +150,11 @@
 - 三表链路 / `tenant_info` 唯一来源 / FK 行为 / JSON1 + CHECK 约束 →
   [`plans/db-schema-v1.md`](./plans/db-schema-v1.md)
 - 已知限制与未来改进 → provider / builtin 两份 README 的"已知限制"段
+- **chat agent 无状态原则**：`agent.Chat` 只持有 `llm.LLM` 与 `System` 字符串，
+  不引入任何实例变量 / 全局状态 / 文件缓存。会话历史、上下文压缩、跨会话记忆
+  全部由调用方叠加；本包只做"1 user message → 1 assistant message"的最小逻辑
+- **cli 物理位置约束**：需要调用 `app/internal/...` 的可执行程序必须放在
+  `app/cmd/<name>/` 下，不能在根 `cmd/`，原因见 §2.7
 
 ---
 

@@ -1,4 +1,4 @@
-package provider
+package sdk
 
 import (
 	"context"
@@ -75,6 +75,12 @@ func TestOpenAIChat_Generate(t *testing.T) {
 	}
 	if got := msg.Text(); got != "你好，世界！" {
 		t.Errorf("Text = %q", got)
+	}
+	if msg.Usage == nil {
+		t.Fatal("Usage = nil, want non-nil（OpenAI Chat 非流式响应体含 usage 字段）")
+	}
+	if msg.Usage.PromptTokens != 10 || msg.Usage.CompletionTokens != 5 || msg.Usage.TotalTokens != 15 {
+		t.Errorf("Usage = %+v, want {10,5,15}", msg.Usage)
 	}
 }
 

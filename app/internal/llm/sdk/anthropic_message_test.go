@@ -1,4 +1,4 @@
-package provider
+package sdk
 
 import (
 	"context"
@@ -69,7 +69,7 @@ func TestAnthropicMessage_Generate(t *testing.T) {
 		BaseURL: *u,
 		APIKey:  "test-key",
 		Sdk:     config.SdkAnthropicMessage,
-		Model:   config.Model{ID: "claude-3-5-sonnet-20241022"},
+		Models:  []config.Model{{ID: "claude-3-5-sonnet-20241022"}},
 	})
 
 	msg, err := p.Generate(context.Background(), llm.GenerateRequest{
@@ -84,6 +84,13 @@ func TestAnthropicMessage_Generate(t *testing.T) {
 	}
 	if got := msg.Text(); got != "Hello from Claude!" {
 		t.Errorf("Text = %q", got)
+	}
+	// Anthropic 不返回 total_tokens；parseAnthropicResponse 按 prompt+completion 自算
+	if msg.Usage == nil {
+		t.Fatal("Usage = nil, want non-nil（Anthropic 非流式响应体含 usage 字段）")
+	}
+	if msg.Usage.PromptTokens != 10 || msg.Usage.CompletionTokens != 5 || msg.Usage.TotalTokens != 15 {
+		t.Errorf("Usage = %+v, want {10,5,15}", msg.Usage)
 	}
 }
 
@@ -114,7 +121,7 @@ func TestAnthropicMessage_ToolCall(t *testing.T) {
 		BaseURL: *u,
 		APIKey:  "test-key",
 		Sdk:     config.SdkAnthropicMessage,
-		Model:   config.Model{ID: "claude-3-5-sonnet-20241022"},
+		Models:  []config.Model{{ID: "claude-3-5-sonnet-20241022"}},
 	})
 
 	msg, err := p.Generate(context.Background(), llm.GenerateRequest{
@@ -180,7 +187,7 @@ func TestAnthropicMessage_Stream(t *testing.T) {
 		BaseURL: *u,
 		APIKey:  "test-key",
 		Sdk:     config.SdkAnthropicMessage,
-		Model:   config.Model{ID: "claude-3-5-sonnet-20241022"},
+		Models:  []config.Model{{ID: "claude-3-5-sonnet-20241022"}},
 	})
 
 	reader, err := p.GenerateWithStream(context.Background(), llm.GenerateRequest{

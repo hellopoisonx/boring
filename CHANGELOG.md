@@ -8,7 +8,52 @@
 
 ### 新增
 
-- **SQLite 持久化层** (`app/internal/store/`)
+- **三种 SDK 兼容 provider** (`app/internal/llm/provider/`)
+  - `OpenAIChatCompatible` / `OpenAIResponseCompatible` / `AnthropicMessageCompatible`：
+    分别包装 [sdk.OpenAIChat] / [sdk.OpenAIResponse] / [sdk.AnthropicMessage]，
+    委托所有 LLM 接口方法。唯一职责是补齐 [llm.LLM.DefaultConfig] 方法，
+    返回 `("openai-chat" / "openai-response" / "anthropic-message", Sdk 零值 LLMConfig)`。
+  - 设计动机：sdk 包专注协议适配，provider 包专注工厂与发现元信息。
+    所有协议级 free function（`convertHistoryMessage` / `parseChatResponse` / `mapChatFinishReason` 等）仅在 sdk 包写一份。
+  - 跨协议 LLM 工厂 `provider.NewLLM(cfg) llm.LLM`：按 `cfg.Sdk` 派发到上述三个 Compatible + `DeepSeekChat`。
+    未识别 sdk panic（程序配置错误，fail-fast）。
+
+
+- **llm 包结构调整** (`app/internal/llm/`)
+  - 新增 `sdk` 子包（`app/internal/llm/sdk/`）：
+    `OpenAIChat` / `OpenAIResponse` / `AnthropicMessage` 三种官方 SDK 适配层，
+    `common.go` 共享 client options / 错误归一化 / tool schema 解析；
+    `docs.go` 包级文档。
+  - 同步删除 `provider/` 下同名旧文件（`openai_chat.go` / `openai_response.go` /
+    `anthropic_message.go` / `common.go` 及其测试），把协议实现集中到 sdk 包；
+    provider 包不再包含协议级代码。
+
+
+- **单轮 chat agent + CLI 入口** (`app/internal/agent/` + `app/cmd/chat/`)
+  - `agent.Chat`：`NewChat(llm, ChatOptions)` 构造；`Reply(ctx, prompt) (string, *Usage, error)`
+    与 `ReplyStream(ctx, prompt) (AsyncReader[StreamChunk], error)` 两种调用形态。
+    不维护历史 / 不压缩 / 不读取记忆；调用方按需叠加上下文。
+  - `app/cmd/chat/chat.go`：单轮对话 CLI 入口。
+    `go run ./app/cmd/chat --prompt "你好"`：读 `config.yaml` → 构造 LLM → 单轮调用 → 打印 `assistant: <text>`。
+    支持 `--config / --prompt / --system / --stream` cmd flag，
+    显式注册 config 包的 5 个 LLM flag（`--provider / --base-url / --api-key / --sdk / --model-id`）。
+    LLM 配置走 `config.Load` 三层优先级：flag > env (`BORING_*`) > file。
+    流式模式逐 token 打印 stdout，遇 SIGINT/SIGTERM 优雅取消；finish 阶段 stderr 打印 `[usage] prompt=X completion=Y total=Z`。
+
+
+- **LLM 接口契约补齐** (`app/internal/llm/types.go` + `app/internal/llm/sdk/*` + `app/internal/llm/provider/*`)
+  - [llm.LLM] 接口增加 `DefaultConfig() (string, config.LLMConfig)` 方法。
+  - sdk 包三个 SDK (`OpenAIChat` / `OpenAIResponse` / `AnthropicMessage`) 补上 `DefaultConfig`，返回与 Sdk 字符串对齐的零值 cfg。
+  - provider 包的 [DeepSeekChat] 补上 `DefaultConfig` (为协议标识统一)。
+  - [llm.Message] 增 `Usage *Usage` 字段（与流式路径 [StreamChunkTypeFinish.Usage] 同源同型），补齐非流式调用路径的 token 用量提取。
+
+- **`config` 包增量扩展** (`app/internal/config/config.go`)
+  - 基于 [feat(config): 新增 Provider 内置预设字段 (cb38301)] 追加：
+  - `Provider.AllowsSdk(s Sdk) bool` 辅助方法，基于 `providerSpecs.AllowedSdks` 判断是否允许；
+  - `LLMConfig.DefaultModel string` 字段保留为向后兼容占位（早期 README / CHANGELOG 文档引用），实际取值请走 `LLMConfig.Model.ID`；
+  - `LLMConfig.Models []Model` 字段补齐，对齐 SDK 测试样例里的多模型列表语法（`Models: []config.Model{{ID: "..."}}`）；
+  - Anthropic provider 的默认 model id 同步为 `claude-3-5-sonnet-20241022`（与 sdk/anthropic_message_test.go 的测试样例对齐）。
+  - 注：`ProviderOpenAI` / `ProviderAnthropic` 常量、`Provider.Spec()`、`Sdk.DefaultBaseURL()`、`providerSpecs` 表已由 cb38301 实现，本 commit 不重复。
   - 三表链路：`user_tenant`（AIM user_id → tenant_id）→ `tenant_info`（1:1 持有 JSON 元数据）→ `tenant_conv`（1:N 持有会话）
   - `tenant_info.tenant_id` 是租户 ID 的唯一来源；`user_tenant.tenant_id` 与之同值但**无 DB 层 FK**（应用层同步）
   - 唯一 DB 层 FK：`tenant_conv.tenant_id` → `tenant_info.tenant_id` ON DELETE CASCADE
@@ -78,18 +123,60 @@
   - `github.com/openai/openai-go/v3 v3.38.0`
   - `github.com/spf13/viper v1.21.0`（配置加载器）
   - `github.com/spf13/pflag v1.0.10`（命令行 flag 覆盖）
+- **`cmd/chat` 单轮对话 CLI 入口** (`app/cmd/chat/chat.go`)
+  - `go run ./app/cmd/chat --prompt "你好"`：读取 `config.yaml` → 构造 LLM → 单轮调用 → 打印 `assistant: <text>`
+  - 支持 `--config / --prompt / --system / --stream` 四个 cmd 入口 flag；
+    另显式注册 config 包绑定的 5 个 LLM flag（`--provider / --base-url / --api-key / --sdk / --model-id`）
+    使 `--help` 完整、CLI 可直接覆盖 yaml/env
+  - LLM 配置走 `config.Load` 三层优先级：flag > env (`BORING_*`) > file
+  - 流式模式逐 token 打印至 stdout，遇 SIGINT / SIGTERM 经 `signal.NotifyContext` 取消；
+    finish 阶段若 `Usage` 非 nil 在 stderr 打印 `[usage] prompt=X completion=Y total=Z`
+  - 物理位置说明：放在 `app/cmd/chat/` 而非根 `cmd/`，因为 Go `internal` 规则限制
+    `app/internal/...` 只能被 `app/...` 子树访问（见 AGENTS.md §2.7）
+
+- **单轮 chat agent** (`app/internal/agent/chat.go`)
+  - `agent.Chat`：1 user message → 1 assistant message；不维护历史 / 不压缩 / 不读取记忆
+  - `Chat.Reply(ctx, prompt) (string, error)`：同步；LLM 决定调工具时返回 `*agent.ErrToolCallNotSupported`（`errors.As` 识别）
+  - `Chat.ReplyStream(ctx, prompt) (asyncrw.AsyncReader[llm.StreamChunk], error)`：流式；流结束以 `asyncrw.ErrAsyncReaderClosed` 表示
+  - 错误：`ErrEmptyPrompt`（prompt 为空）、`*ErrToolCallNotSupported`（不支持工具）、`fmt.Errorf`（不期望的 MessageType）
+
+- **provider 跨协议工厂** (`app/internal/llm/provider/llm.go`)
+  - `provider.NewLLM(cfg) llm.LLM`：按 `cfg.Sdk` 派发到 `NewOpenAIChat` / `NewOpenAIResponse` / `NewAnthropicMessage` / `NewDeepSeekChat`
+  - 未识别 sdk panic（程序配置错误，fail-fast；与 `app/internal/llm/provider/README.md` §调用示例 中的伪代码对齐）
+
+- **依赖管理** (`go.mod` / `go.sum`)
 
 - **调试脚本** (`main.go`)
   - 用 `httptest` mock Anthropic SSE 流，验证 `bufio.ScanLines` 解析行为
 
 - **测试覆盖**
+  - `app/internal/agent/chat_test.go`：9 个用例（fake LLM，不依赖外部 HTTP），覆盖 `Reply` / `ReplyStream` 对 `System` + `Input.MsgType` + `Input.Text` 的透传、prompt 为空、LLM 错误透传、`tool_call` 不支持、不期望的 MessageType
   - `app/internal/llm/provider/`：5 份 `*_test.go`，覆盖四家协议的非流式
     （文本 + 工具调用）+ 流式路径；DeepSeek 额外验证 token 统计（`Usage`）与
-  - `app/internal/llm/provider/README.md` 给出 race detector 多次跑的命令
+    `app/internal/llm/provider/README.md` 给出 race detector 多次跑的命令
   - `app/internal/store/store_test.go`：15 个用例，覆盖三表 CRUD、Upsert、
     FK CASCADE、JSON CHECK、status 过滤、并发安全（`go test -race` 通过）
   - `app/internal/config/loader_test.go`：7 个用例，覆盖基本解析、文件不存在、
-    模板落盘、env 覆盖、flag > env 优先级、fsnotify 热加载触发、watch 必传回调
+  - 模板落盘、env 覆盖、flag > env 优先级、fsnotify 热加载触发、watch 必传回调
+
+### 修复
+
+- **DeepSeek 非流式调用 400 错误** (`app/internal/llm/provider/deepseek.go`)
+  - 现象：`go run ./app/cmd/chat --prompt "你好"` 返回 `400 invalid_request_error: stream_options should be set along with stream = true`
+  - 根因：`DeepSeekChat.buildParams` 无条件设置 `StreamOptions`；`openai-go` SDK 的 `omitzero` 对带 `paramObj` 嵌入字段的 `ChatCompletionStreamOptionsParam` 不会自动省略，导致非流式请求 body 里依然带 `stream_options`，触发 DeepSeek 服务端校验
+  - 修复：`buildParams` 加 `stream bool` 参数，仅在流式调用时设 `StreamOptions`；同时修正过时的注释（"非流式调用时 SDK 会忽略此字段" 是错的）
+  - 测试：收紧 `mockDeepSeekHandler` 断言非流式 body 不含 `stream_options`；新增 `mockDeepSeekStreamHandler` 断言流式 body 同时带 `stream=true` 与 `stream_options.include_usage=true`；故意回滚修复时 3 个非流式用例稳定失败（"实际为 map[include_usage:true]"）
+
+- **非流式调用丢失 token 用量** (`app/internal/llm/types.go` + `app/internal/llm/provider/*.go` + `app/internal/agent/chat.go` + `app/cmd/chat/chat.go`)
+  - 现象：`go run ./app/cmd/chat --prompt "你好"`（默认非流式）不打印 `[usage] ...`，与 `--stream` 行为不一致
+  - 根因：4 个 provider 的非流式解析（`parseChatResponse` / `parseResponseOutput` / `parseAnthropicResponse`）丢弃响应体里 `usage` 字段；`llm.Message` 也没有挂载点；`agent.Chat.Reply` 只返回 `(string, error)`
+  - 修复：
+    - `llm.Message` 加 `Usage *Usage` 字段，与流式路径 `StreamChunkTypeFinish.Usage` 同源同型
+    - 3 个非流式解析点统一从响应里读 `usage` 并填到 `Message.Usage`；Anthropic 不给 total_tokens 时按流式路径同样语义自算
+    - `Chat.Reply` 签名改为 `(string, *Usage, error)`；错误路径也透传 usage（让 CLI 能透到 stderr）
+    - `cmd/chat.runSync` 复用 `runStream` 的 stderr 打印格式 `[usage] prompt=X completion=Y total=Z`
+  - 破坏性变更：`agent.Chat.Reply` 签名变更（内部 API，目前只有 chat CLI 一处调用方）
+  - 测试：`agent/chat_test.go` 现有 6 个 `Reply` 用例适配新签名 + 新增 `TestChat_Reply_PropagatesUsage`；4 家 provider 的非流式 `Generate` 用例都加 Usage 字段断言（值与响应体 `usage` 字段对齐）
 
 ### 设计亮点
 
@@ -105,5 +192,6 @@
   调用方通过 `Recv(ctx)` 拉取 chunk
 - **viper 复用 yaml tag**：mapstructure hook 把 `TagName` 切到 `yaml`，
   并自定义 `string → url.URL` 解码，保留现有结构体不改动
-
+- **chat agent 不引入状态**：`agent.Chat` 只持有 `llm.LLM` + `System` 字符串，
+  无任何实例变量 / 全局状态；调用方拥有完整控制权，多轮 / 记忆 / 工具由调用方按需叠加
 [未发布]: https://github.com/hellopoisonx/boring

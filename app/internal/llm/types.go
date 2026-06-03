@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hellopoisonx/boring/app/internal/config"
 	"github.com/hellopoisonx/boring/app/shared/asyncrw"
 )
 
@@ -37,6 +38,9 @@ type LLM interface {
 	// 结束标志为 [StreamChunkTypeFinish]（含 [FinishReason] / [Usage]）；
 	// 错误经 [asyncrw.AsyncReader.Recv] 返回。
 	GenerateWithStream(ctx context.Context, req GenerateRequest) (asyncrw.AsyncReader[StreamChunk], error)
+
+	// DefaultConfig 返回 Provider name 和 Provider 默认的 [config.LLMConfig]
+	DefaultConfig() (string, config.LLMConfig)
 }
 
 // GenerateRequest LLM 调用请求
@@ -175,6 +179,10 @@ func (t MessageType) String() string {
 type Message struct {
 	MsgType MessageType
 	Content []*ContentPart
+
+	// Usage 本次响应的 token 用量；可能为 nil（provider 未在响应中带回）。
+	// 与流式路径的 [StreamChunkTypeFinish].Usage 同源同型，方便调用方在两条路径间共享统计逻辑。
+	Usage *Usage
 }
 
 // NewSystemMessage 构造 [MessageTypeSystem] 消息

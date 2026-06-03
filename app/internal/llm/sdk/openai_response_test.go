@@ -1,4 +1,4 @@
-package provider
+package sdk
 
 import (
 	"context"
@@ -80,7 +80,7 @@ func TestOpenAIResponse_Generate(t *testing.T) {
 		BaseURL: *u,
 		APIKey:  "test-key",
 		Sdk:     config.SdkOpenAIResponse,
-		Model:   config.Model{ID: "gpt-4o"},
+		Models:  []config.Model{{ID: "gpt-4o"}},
 	})
 
 	msg, err := p.Generate(context.Background(), llm.GenerateRequest{
@@ -95,6 +95,12 @@ func TestOpenAIResponse_Generate(t *testing.T) {
 	}
 	if got := msg.Text(); got != "hi from responses" {
 		t.Errorf("Text = %q", got)
+	}
+	if msg.Usage == nil {
+		t.Fatal("Usage = nil, want non-nil（OpenAI Responses 非流式响应体含 usage 字段）")
+	}
+	if msg.Usage.PromptTokens != 5 || msg.Usage.CompletionTokens != 3 || msg.Usage.TotalTokens != 8 {
+		t.Errorf("Usage = %+v, want {5,3,8}", msg.Usage)
 	}
 }
 
@@ -118,7 +124,6 @@ func TestOpenAIResponse_Stream(t *testing.T) {
 		``,
 	}, "\n") + "\n"
 
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, body)
@@ -130,7 +135,7 @@ func TestOpenAIResponse_Stream(t *testing.T) {
 		BaseURL: *u,
 		APIKey:  "test-key",
 		Sdk:     config.SdkOpenAIResponse,
-		Model:   config.Model{ID: "gpt-4o"},
+		Models:  []config.Model{{ID: "gpt-4o"}},
 	})
 
 	reader, err := p.GenerateWithStream(context.Background(), llm.GenerateRequest{

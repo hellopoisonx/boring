@@ -1,4 +1,4 @@
-// Package provider — OpenAI Responses 协议适配。
+// Package sdk — OpenAI Responses 协议适配。
 //
 // 通过官方 [openai-go/v3] SDK 调用 /v1/responses（responses 子包）。
 // 与 Chat Completions 的关键差异：
@@ -7,7 +7,7 @@
 //   - 非流式响应没有 Choices，文本与工具调用都从 [responses.Response.Output] 数组中提取；
 //   - 流式是事件流（response.created / response.output_text.delta /
 //     response.function_call_arguments.delta / response.completed ...），需按 event.Type 路由。
-package provider
+package sdk
 
 import (
 	"context"
@@ -42,6 +42,12 @@ func NewOpenAIResponse(cfg config.LLMConfig) *OpenAIResponse {
 // Compile-time 断言：OpenAIResponse 必须实现 [llm.LLM]。
 var _ llm.LLM = (*OpenAIResponse)(nil)
 
+// DefaultConfig 返回 (Sdk 字符串, Sdk 零值 LLMConfig)。
+func (p *OpenAIResponse) DefaultConfig() (string, config.LLMConfig) {
+	return string(config.SdkOpenAIResponse), config.LLMConfig{Sdk: config.SdkOpenAIResponse}
+}
+
+
 // Generate 同步调用 Responses 协议。
 func (p *OpenAIResponse) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.Message, error) {
 	params, err := p.buildParams(req)
@@ -52,7 +58,7 @@ func (p *OpenAIResponse) Generate(ctx context.Context, req llm.GenerateRequest) 
 	if err != nil {
 		return nil, wrapError(p.cfg, err)
 	}
-	return parseResponseOutput(resp.Output)
+	return parseResponseOutput(resp.Output, resp.Usage)
 }
 
 // GenerateWithStream 流式调用 Responses 协议；按事件类型路由产出 [llm.StreamChunk]。
@@ -246,10 +252,10 @@ func convertToolsResponse(tools []llm.ToolInfo) ([]responses.ToolUnionParam, err
 
 // parseResponseOutput 把非流式响应的 Output 数组翻译为 [llm.Message]。
 // 这是个 free function（与 chat provider 共享处理逻辑）。
-func parseResponseOutput(output []responses.ResponseOutputItemUnion) (*llm.Message, error) {
+func parseResponseOutput(output []responses.ResponseOutputItemUnion, respUsage responses.ResponseUsage) (*llm.Message, error) {
 	var (
-		textParts   []string
-		toolCalls   []*llm.ToolCall
+		textParts []string
+		toolCalls []*llm.ToolCall
 	)
 
 	for _, item := range output {
@@ -277,17 +283,20 @@ func parseResponseOutput(output []responses.ResponseOutputItemUnion) (*llm.Messa
 			// 其他类型（reasoning、web_search_call、file_search_call 等）忽略
 		}
 	}
+	usage := usageFromPromptCompletion(respUsage.InputTokens, respUsage.OutputTokens, respUsage.TotalTokens)
 
 	if len(toolCalls) > 0 {
 		body, _ := json.Marshal(toolCalls)
 		return &llm.Message{
 			MsgType: llm.MessageTypeToolCall,
 			Content: []*llm.ContentPart{{PartType: llm.ContentPartTypeText, Body: body}},
+			Usage:   usage,
 		}, nil
 	}
 	return &llm.Message{
 		MsgType: llm.MessageTypeAssistant,
 		Content: []*llm.ContentPart{llm.NewTextContent(strings.Join(textParts, ""))},
+		Usage:   usage,
 	}, nil
 }
 

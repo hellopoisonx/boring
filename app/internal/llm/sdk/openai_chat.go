@@ -1,10 +1,10 @@
-// Package provider — OpenAI Chat Completions 协议适配。
+// Package sdk — OpenAI Chat Completions 协议适配。
 //
 // 通过官方 [openai-go/v3] SDK 调用 /v1/chat/completions。
 // 系统提示通过 messages[0] = role=system 注入；工具定义走
 // [openai.ChatCompletionFunctionToolParam]；流式 chunk 走
 // [ssestream.Stream]。
-package provider
+package sdk
 
 import (
 	"context"
@@ -26,6 +26,12 @@ import (
 type OpenAIChat struct {
 	cfg    config.LLMConfig
 	client openai.Client
+
+	// streamIncludeUsage 控制流式请求是否带 stream_options.include_usage=true。
+	// 默认 false（OpenAI 协议下流式一般不需要 usage，最后一个 chunk 的 usage 字段不保证填充）。
+	// 某些 OpenAI-兼容 provider（如 DeepSeek）需要该开关才能在流式响应里拿到 usage。
+	// 设置入口：[OpenAIChat.WithStreamIncludeUsage]。
+	streamIncludeUsage bool
 }
 
 // NewOpenAIChat 用给定的 [config.LLMConfig] 构造 [OpenAIChat]。
@@ -36,8 +42,23 @@ func NewOpenAIChat(cfg config.LLMConfig) *OpenAIChat {
 	}
 }
 
+// WithStreamIncludeUsage 打开流式请求的 stream_options.include_usage=true。
+// 链式调用：sdk.NewOpenAIChat(cfg).WithStreamIncludeUsage()。
+// 供 [provider.DeepSeekChat] 等需要服务端在最后一个 chunk 返回 usage 的场景使用。
+func (p *OpenAIChat) WithStreamIncludeUsage() *OpenAIChat {
+	p.streamIncludeUsage = true
+	return p
+}
+
 // Compile-time 断言：OpenAIChat 必须实现 [llm.LLM]。
-var _ llm.LLM = (*OpenAIChat)(nil)
+
+
+// DefaultConfig 返回 (Sdk 字符串, Sdk 零值 LLMConfig)。
+// SDK 自身不绑定 BaseURL/APIKey/Model 等业务字段，故仅返回协议标识。
+func (p *OpenAIChat) DefaultConfig() (string, config.LLMConfig) {
+	return string(config.SdkOpenAIChat), config.LLMConfig{Sdk: config.SdkOpenAIChat}
+}
+
 
 // Generate 同步调用 Chat Completions；返回 [llm.Message]。
 func (p *OpenAIChat) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.Message, error) {
@@ -57,6 +78,13 @@ func (p *OpenAIChat) GenerateWithStream(ctx context.Context, req llm.GenerateReq
 	params, err := p.buildParams(req)
 	if err != nil {
 		return nil, &llm.Error{Provider: string(p.cfg.Sdk), Message: err.Error(), Cause: err}
+	}
+	// DeepSeek 等 OpenAI-兼容 provider 需要 stream_options.include_usage=true
+	// 才能在最后一个 chunk 返回 usage 字段；通过 [OpenAIChat.WithStreamIncludeUsage] 启用。
+	if p.streamIncludeUsage {
+		params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: param.NewOpt(true),
+		}
 	}
 	stream := p.client.Chat.Completions.NewStreaming(ctx, params)
 	w := asyncrw.NewAsyncWriter[llm.StreamChunk](64)
@@ -247,11 +275,13 @@ func parseChatResponse(provider string, resp *openai.ChatCompletion) (*llm.Messa
 			})
 		}
 	}
+	usage := usageFromPromptCompletion(resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens)
 
 	if len(calls) > 0 {
 		return &llm.Message{
 			MsgType: llm.MessageTypeToolCall,
 			Content: []*llm.ContentPart{toolCallPart(calls)},
+			Usage:   usage,
 		}, nil
 	}
 
@@ -259,6 +289,7 @@ func parseChatResponse(provider string, resp *openai.ChatCompletion) (*llm.Messa
 	return &llm.Message{
 		MsgType: llm.MessageTypeAssistant,
 		Content: []*llm.ContentPart{llm.NewTextContent(msg.Content)},
+		Usage:   usage,
 	}, nil
 }
 

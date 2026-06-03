@@ -1,4 +1,4 @@
-// Package provider — Anthropic Messages 协议适配。
+// Package sdk — Anthropic Messages 协议适配。
 //
 // 通过官方 [anthropic-sdk-go] SDK 调用 /v1/messages。
 // 与 OpenAI 协议的关键差异：
@@ -8,7 +8,7 @@
 //   - 工具调用以 [ToolUseBlock] 形式出现在响应 Content[] 中；
 //   - 流式是事件流（message_start / content_block_start / content_block_delta /
 //     content_block_stop / message_delta / message_stop），需按事件类型路由。
-package provider
+package sdk
 
 import (
 	"context"
@@ -42,6 +42,12 @@ func NewAnthropicMessage(cfg config.LLMConfig) *AnthropicMessage {
 // Compile-time 断言：AnthropicMessage 必须实现 [llm.LLM]。
 var _ llm.LLM = (*AnthropicMessage)(nil)
 
+// DefaultConfig 返回 (Sdk 字符串, Sdk 零值 LLMConfig)。
+func (p *AnthropicMessage) DefaultConfig() (string, config.LLMConfig) {
+	return string(config.SdkAnthropicMessage), config.LLMConfig{Sdk: config.SdkAnthropicMessage}
+}
+
+
 // Generate 同步调用 Messages 协议。
 func (p *AnthropicMessage) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.Message, error) {
 	params, err := p.buildParams(req)
@@ -52,7 +58,7 @@ func (p *AnthropicMessage) Generate(ctx context.Context, req llm.GenerateRequest
 	if err != nil {
 		return nil, wrapError(p.cfg, err)
 	}
-	return parseAnthropicResponse(resp)
+	return parseAnthropicResponse(resp, resp.Usage)
 }
 
 // GenerateWithStream 流式调用 Messages 协议。
@@ -230,8 +236,7 @@ func convertToolsAnthropic(tools []llm.ToolInfo) ([]anthropic.ToolUnionParam, er
 	return out, nil
 }
 
-// parseAnthropicResponse 把非流式响应翻译为 [llm.Message]。
-func parseAnthropicResponse(resp *anthropic.Message) (*llm.Message, error) {
+func parseAnthropicResponse(resp *anthropic.Message, respUsage anthropic.Usage) (*llm.Message, error) {
 	var (
 		textParts []string
 		toolCalls []*llm.ToolCall
@@ -252,16 +257,24 @@ func parseAnthropicResponse(resp *anthropic.Message) (*llm.Message, error) {
 			})
 		}
 	}
+	// Anthropic 不在响应里给 total_tokens；按流式路径同样的"prompt + completion"语义自算
+	var total int64
+	if respUsage.InputTokens > 0 || respUsage.OutputTokens > 0 {
+		total = respUsage.InputTokens + respUsage.OutputTokens
+	}
+	usage := usageFromPromptCompletion(respUsage.InputTokens, respUsage.OutputTokens, total)
 	if len(toolCalls) > 0 {
 		body, _ := json.Marshal(toolCalls)
 		return &llm.Message{
 			MsgType: llm.MessageTypeToolCall,
 			Content: []*llm.ContentPart{{PartType: llm.ContentPartTypeText, Body: body}},
+			Usage:   usage,
 		}, nil
 	}
 	return &llm.Message{
 		MsgType: llm.MessageTypeAssistant,
 		Content: []*llm.ContentPart{llm.NewTextContent(strings.Join(textParts, ""))},
+		Usage:   usage,
 	}, nil
 }
 
