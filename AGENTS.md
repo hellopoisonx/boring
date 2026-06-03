@@ -39,6 +39,8 @@
   [`app/internal/llm/provider/openai_response.go`](./app/internal/llm/provider/openai_response.go)
 - Anthropic Messages →
   [`app/internal/llm/provider/anthropic_message.go`](./app/internal/llm/provider/anthropic_message.go)
+- DeepSeek（OpenAI 兼容 Chat Completions）→
+  [`app/internal/llm/provider/deepseek.go`](./app/internal/llm/provider/deepseek.go)
 
 ### 2.3 内置文件工具
 
@@ -63,12 +65,17 @@
   [`app/shared/asyncrw/asyncrw.go`](./app/shared/asyncrw/asyncrw.go)
 
 ### 2.5 配置
+- LLMConfig / Model / Sdk 枚举 → [`app/internal/config/config.go`](./app/internal/config/config.go)
 
-- LLMConfig / Model / Sdk 枚举 →
-  [`app/internal/config/config.go`](./app/internal/config/config.go)
+### 2.6 持久化层
+- `*Store` / `Open` / 三表 DDL → [`app/internal/store/store.go`](./app/internal/store/store.go) + [`schema.sql`](./app/internal/store/schema.sql)
+- `UserTenantStore` / `Create` / `GetByUserID` / `GetByTenantID` → [`app/internal/store/user_tenant.go`](./app/internal/store/user_tenant.go)
+- `TenantInfoStore` / `Upsert` / `GetByTenantID` / `Update` → [`app/internal/store/tenant_info.go`](./app/internal/store/tenant_info.go)
+- `TenantConvStore` / `Create` / `ListByTenant` / `ListByTenantAndStatus` / `UpdateStatus` → [`app/internal/store/tenant_conv.go`](./app/internal/store/tenant_conv.go)
+- `Conv` 领域类型 + 状态枚举 → [`app/internal/store/model.go`](./app/internal/store/model.go)
+- 设计与决策记录 → [`plans/db-schema-v1.md`](./plans/db-schema-v1.md)
 
-### 2.6 入口
-
+### 2.7 入口
 - 调试脚本（**非产品代码**）→ [`main.go`](./main.go)
 - 未来 CLI 入口占位 → [`cmd/`](./cmd/)
 
@@ -80,6 +87,7 @@
   [`app/internal/llm/provider/`](./app/internal/llm/provider/)
 - 工具测试 →
   [`app/internal/llm/tools/builtin/`](./app/internal/llm/tools/builtin/)
+- 存储层集成测试 → [`app/internal/store/store_test.go`](./app/internal/store/store_test.go)
 
 ### 3.1 测试命令
 
@@ -115,7 +123,9 @@
   [`app/internal/llm/provider/README.md`](./app/internal/llm/provider/README.md)
 - Env 字段约定 / 业务 vs 系统错误边界 / 行数语义 / 锁粒度 →
   [`app/internal/llm/tools/builtin/README.md`](./app/internal/llm/tools/builtin/README.md)
-- 已知限制与未来改进 → 同上两份 README 的"已知限制"段
+- 三表链路 / `tenant_info` 唯一来源 / FK 行为 / JSON1 + CHECK 约束 →
+  [`plans/db-schema-v1.md`](./plans/db-schema-v1.md)
+- 已知限制与未来改进 → provider / builtin 两份 README 的"已知限制"段
 
 ---
 

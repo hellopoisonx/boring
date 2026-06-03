@@ -15,6 +15,5 @@
 
 ## 数据存储
 
-- 用户数据: [sqlite](https://github.com/ncruces/go-sqlite3)
+- 用户数据: [sqlite](https://github.com/ncruces/go-sqlite3) — 三表 `user_tenant` / `tenant_info` / `tenant_conv`，详见 [`app/internal/store/schema.sql`](./app/internal/store/schema.sql) 与 [`plans/db-schema-v1.md`](./plans/db-schema-v1.md)
 - 向量数据库: [chromem-go](https://github.com/philippgille/chromem-go)
-- 分层记忆: markdown (llm 直接调用 `grep` 工具)
