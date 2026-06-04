@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -142,9 +143,12 @@ func Load(path string, opts Options) (*Loader, error) {
 	v.SetDefault("model.id", "")
 	v.SetDefault("model.maxResponse", 0)
 	v.SetDefault("model.maxContext", 0)
+	v.SetDefault("storage.dsn", "")
 
 	if opts.EnvPrefix != "" {
 		v.SetEnvPrefix(opts.EnvPrefix)
+		// 嵌套 key 的 . 转为 _，保证 storage.dsn ↔ STORAGE_DSN 可用
+		v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 		v.AutomaticEnv()
 		// url.URL 走 string 中间层（key 是 baseUrl，下划线是 viper 默认替换策略）
 		_ = v.BindEnv("provider")
@@ -152,6 +156,7 @@ func Load(path string, opts Options) (*Loader, error) {
 		_ = v.BindEnv("apiKey")
 		_ = v.BindEnv("sdk")
 		_ = v.BindEnv("model.id")
+		_ = v.BindEnv("storage.dsn")
 	}
 
 	if opts.FlagSet != nil {
@@ -355,6 +360,7 @@ func bindFlags(v *viper.Viper, fs *pflag.FlagSet) {
 		{"apiKey", "api-key", "LLM provider API key"},
 		{"sdk", "sdk", "SDK 协议: openai-chat / openai-response / anthropic-message / deepseek"},
 		{"model.id", "model-id", "Model ID (如 gpt-4o)"},
+		{"storage.dsn", "db", "SQLite DSN（覆盖 yaml 的 storage.dsn 与 BORING_DB）"},
 	} {
 		// 如果 flag 没显式设置，BindPFlag 不会覆盖 viper 已有的值（来自 yaml / env），
 		// 满足 flag > env > file 的优先级。
@@ -458,4 +464,8 @@ model:
   id: gpt-4o                   # 实际下发给 provider 的模型 ID；留空走 provider 默认
 #  maxResponse: 1024            # 单次响应 token 上限；0 走 provider 兜底
 #  maxContext: 128000           # 上下文窗口大小；0 表示不限制
+
+# 本地持久化（SQLite）配置
+storage:
+  dsn: file:boring.db            # SQLite DSN（ncruces/go-sqlite3 格式）；留空默认 ./boring.db
 `

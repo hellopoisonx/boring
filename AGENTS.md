@@ -70,35 +70,39 @@
   - 各 provider 的 `DefaultConfig()` 定义完整默认配置，通过 `init()` 注册到 `config.RegisterProviderDefaults`
   - `Provider.AllowsSdk(s Sdk) bool`：该 provider 是否允许指定 sdk（委托注册表）
   - `Sdk.DefaultBaseURL() string`：sdk 协议官方默认 BaseURL
+  - `StorageConfig`：本地持久化配置（SQLite DSN），三层优先级同 LLM 配置
 - viper 配置加载器（flag/env/file 三层优先级 + fsnotify 热加载）→
   [`app/internal/config/loader.go`](./app/internal/config/loader.go)
 ### 2.6 持久化层
 - `*Store` / `Open` / 三表 DDL → [`app/internal/store/store.go`](./app/internal/store/store.go) + [`schema.sql`](./app/internal/store/schema.sql)
 - `UserTenantStore` / `Create` / `GetByUserID` / `GetByTenantID` → [`app/internal/store/user_tenant.go`](./app/internal/store/user_tenant.go)
 - `TenantInfoStore` / `Upsert` / `GetByTenantID` / `Update` → [`app/internal/store/tenant_info.go`](./app/internal/store/tenant_info.go)
-- `TenantConvStore` / `Create` / `ListByTenant` / `ListByTenantAndStatus` / `UpdateStatus` → [`app/internal/store/tenant_conv.go`](./app/internal/store/tenant_conv.go)
+- `TenantConvStore` / `Create` / `ListByTenant` / `ListByTenantAndStatus` / `LatestActiveByTenant` / `UpdateStatus` / `UpdateUsage` / `IncUsage` → [`app/internal/store/tenant_conv.go`](./app/internal/store/tenant_conv.go)
 - `Conv` 领域类型 + 状态枚举 → [`app/internal/store/model.go`](./app/internal/store/model.go)
 - 设计与决策记录 → [`plans/db-schema-v1.md`](./plans/db-schema-v1.md)
 
 ### 2.7 入口
 - 调试脚本（**非产品代码**）→ [`main.go`](./main.go)
-- `cmd/chat` 单轮对话 CLI 入口 → [`app/cmd/chat/chat.go`](./app/cmd/chat/chat.go)
+- `cmd/chat` 对话 CLI 入口（`--profile` 必填，`--db` 可选）→ [`app/cmd/chat/chat.go`](./app/cmd/chat/chat.go)
   - **物理位置在 `app/cmd/chat/` 而非根 `cmd/`**：
     Go `internal` 规则限制 `app/internal/...` 只能被 `app/...` 子树访问
     （参见 [Go 官方文档](https://pkg.go.dev/cmd/go#hdr-Internal_Directories)）。
     所有需要调用 `app/internal/...` 的可执行程序都应放在 `app/cmd/<name>/` 下。
   - LLM 配置走 [`app/internal/config`](./app/internal/config/) 统一收口，
     三层优先级：flag > env (`BORING_*`) > file
+  - 租户隔离：`--profile` → `user_tenant` → `tenant_id`；同 profile 复用最后 active conv
+  - DB 路径：`--db` > env `BORING_DB` > `storage.dsn` > `./boring.db`；每轮 finish 后 `IncUsage` 写库
+  - DB 错误不中断 LLM 响应（仅 stderr warn）
 
-### 2.8 单轮 chat agent
+### 2.8 chat agent
+
 - `agent.Chat` / `ChatOptions` / `NewChat` / `Reply` / `ReplyStream` /
   `ErrEmptyPrompt` / `ErrToolCallNotSupported` →
   [`app/internal/agent/chat.go`](./app/internal/agent/chat.go)
-- 原则：不维护会话历史、不压缩上下文、不读取跨会话记忆；
-  多轮 / 工具调用 / 记忆场景请直接使用 [`llm.LLM`](./app/internal/llm/types.go) 接口由调用方编排
+- 原则：同一实例内自动维护会话历史（user + assistant），不压缩上下文、不读取跨会话记忆、不主动裁剪历史；
+  工具调用等复杂编排请直接使用 [`llm.LLM`](./app/internal/llm/types.go) 接口
 - 配套测试：fake LLM（不依赖外部 HTTP）→
   [`app/internal/agent/chat_test.go`](./app/internal/agent/chat_test.go)
-
 ---
 
 ## 3. 测试索引
@@ -149,9 +153,9 @@
 - 三表链路 / `tenant_info` 唯一来源 / FK 行为 / JSON1 + CHECK 约束 →
   [`plans/db-schema-v1.md`](./plans/db-schema-v1.md)
 - 已知限制与未来改进 → provider / builtin 两份 README 的"已知限制"段
-- **chat agent 无状态原则**：`agent.Chat` 只持有 `llm.LLM` 与 `System` 字符串，
-  不引入任何实例变量 / 全局状态 / 文件缓存。会话历史、上下文压缩、跨会话记忆
-  全部由调用方叠加；本包只做"1 user message → 1 assistant message"的最小逻辑
+- **chat agent 会话历史**：`agent.Chat` 在同一实例内维护 `[]llm.Message` 会话历史，
+  每次 Reply / ReplyStream 成功后自动追加本轮 user + assistant 消息；
+  不压缩上下文、不读取跨会话记忆、不主动裁剪历史。调用方保证单 goroutine 使用
 - **cli 物理位置约束**：需要调用 `app/internal/...` 的可执行程序必须放在
   `app/cmd/<name>/` 下，不能在根 `cmd/`，原因见 §2.7
 

@@ -55,6 +55,14 @@ type LLMConfig struct {
 	Models       []Model  `yaml:"models"`
 }
 
+// StorageConfig 是本地持久化层（SQLite）的配置。
+// 当前仅含 DSN；后续 chromem/go-sqlite3-vfs 等可继续追加字段。
+type StorageConfig struct {
+	// DSN SQLite 数据源名（ncruces/go-sqlite3 格式，如 file:boring.db?cache=shared）。
+	// 空串时由调用方回退默认值。
+	DSN string `yaml:"dsn"`
+}
+
 // AllowsSdk 返回 provider 是否允许使用给定 sdk。
 // 未识别的 provider 一律返回 false。
 //

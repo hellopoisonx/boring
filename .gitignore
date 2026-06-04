@@ -1,3 +1,5 @@
 plans/
 config.yaml
 provider.test
+*.db
+chat

@@ -265,3 +265,123 @@ func TestChat_ReplyStream_LLMError(t *testing.T) {
 		t.Errorf("err = %v, want 透传 upstream", err)
 	}
 }
+
+// ---------- 多轮历史 ----------
+
+func TestChat_Reply_MultiTurn(t *testing.T) {
+	fake := &fakeLLM{generateResp: llm.NewAssistantMessage("助手回复")}
+	c := NewChat(fake, ChatOptions{})
+
+	// 第一轮
+	_, _, err := c.Reply(context.Background(), "消息1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.history) != 2 {
+		t.Fatalf("第1轮后 history 长度 = %d, want 2", len(c.history))
+	}
+	if c.history[0].MsgType != llm.MessageTypeUserInput || c.history[0].Text() != "消息1" {
+		t.Errorf("history[0] = %s %q, want user 消息1", c.history[0].MsgType, c.history[0].Text())
+	}
+	if c.history[1].MsgType != llm.MessageTypeAssistant || c.history[1].Text() != "助手回复" {
+		t.Errorf("history[1] = %s %q, want assistant 助手回复", c.history[1].MsgType, c.history[1].Text())
+	}
+
+	// 第二轮：请求应包含第一轮的历史
+	_, _, err = c.Reply(context.Background(), "消息2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.history) != 4 {
+		t.Fatalf("第2轮后 history 长度 = %d, want 4", len(c.history))
+	}
+	if len(fake.lastGenReq.History) != 2 {
+		t.Fatalf("第2轮请求的 History 长度 = %d, want 2", len(fake.lastGenReq.History))
+	}
+	if fake.lastGenReq.History[0].Text() != "消息1" {
+		t.Errorf("History[0] = %q, want 消息1", fake.lastGenReq.History[0].Text())
+	}
+	if fake.lastGenReq.History[1].Text() != "助手回复" {
+		t.Errorf("History[1] = %q, want 助手回复", fake.lastGenReq.History[1].Text())
+	}
+	if fake.genCalls != 2 {
+		t.Errorf("Generate 调用次数 = %d, want 2", fake.genCalls)
+	}
+}
+
+func TestChat_Reply_ErrorNotAppendHistory(t *testing.T) {
+	upstream := errors.New("llm boom")
+	fake := &fakeLLM{generateErr: upstream}
+	c := NewChat(fake, ChatOptions{})
+
+	_, _, err := c.Reply(context.Background(), "x")
+	if !errors.Is(err, upstream) {
+		t.Fatal(err)
+	}
+	if len(c.history) != 0 {
+		t.Errorf("错误路径不应追加 history，但 history 长度 = %d", len(c.history))
+	}
+}
+
+func TestChat_ReplyStream_MultiTurn(t *testing.T) {
+	stream1 := []llm.StreamChunk{
+		{Type: llm.StreamChunkTypeText, Text: "第一轮"},
+		{Type: llm.StreamChunkTypeFinish, FinishReason: llm.FinishReasonStop},
+	}
+	stream2 := []llm.StreamChunk{
+		{Type: llm.StreamChunkTypeText, Text: "第二轮"},
+		{Type: llm.StreamChunkTypeFinish, FinishReason: llm.FinishReasonStop},
+	}
+	// 用一个可变字段让 fake 能换流
+	fake := &fakeLLM{streamChunks: stream1}
+	c := NewChat(fake, ChatOptions{})
+
+	// 第一轮
+	drainStream(t, c, "hi1")
+	if len(c.history) != 2 {
+		t.Fatalf("第1轮后 history 长度 = %d, want 2", len(c.history))
+	}
+	if c.history[0].Text() != "hi1" {
+		t.Errorf("history[0] = %q, want hi1", c.history[0].Text())
+	}
+	if c.history[1].Text() != "第一轮" {
+		t.Errorf("history[1] = %q, want 第一轮", c.history[1].Text())
+	}
+
+	// 第二轮：换一条流
+	fake.streamChunks = stream2
+	drainStream(t, c, "hi2")
+	if len(c.history) != 4 {
+		t.Fatalf("第2轮后 history 长度 = %d, want 4", len(c.history))
+	}
+	if len(fake.lastStrReq.History) != 2 {
+		t.Fatalf("第2轮请求的 History 长度 = %d, want 2", len(fake.lastStrReq.History))
+	}
+	if fake.lastStrReq.History[0].Text() != "hi1" {
+		t.Errorf("History[0] = %q, want hi1", fake.lastStrReq.History[0].Text())
+	}
+	if fake.lastStrReq.History[1].Text() != "第一轮" {
+		t.Errorf("History[1] = %q, want 第一轮", fake.lastStrReq.History[1].Text())
+	}
+	if fake.strCalls != 2 {
+		t.Errorf("GenerateWithStream 调用次数 = %d, want 2", fake.strCalls)
+	}
+}
+
+// drainStream 调用 c.ReplyStream 并排空返回的 reader。
+func drainStream(t *testing.T, c *Chat, prompt string) {
+	t.Helper()
+	reader, err := c.ReplyStream(context.Background(), prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		_, err := reader.Recv(context.Background())
+		if err != nil {
+			if errors.Is(err, asyncrw.ErrAsyncReaderClosed) {
+				return
+			}
+			t.Fatalf("Recv: %v", err)
+		}
+	}
+}

@@ -17,7 +17,10 @@ type TenantConvStore interface {
 	GetByConvID(ctx context.Context, convID int64) (Conv, error)
 	ListByTenant(ctx context.Context, tenantID int64) ([]Conv, error)
 	ListByTenantAndStatus(ctx context.Context, tenantID int64, status string) ([]Conv, error)
+	LatestActiveByTenant(ctx context.Context, tenantID int64) (Conv, error)
 	UpdateStatus(ctx context.Context, convID int64, status string) error
+	UpdateUsage(ctx context.Context, convID int64, totalTokens int64, modelID, modelProvider string) error
+	IncUsage(ctx context.Context, convID int64, deltaTokens int64, modelID, modelProvider string) error
 }
 
 type tenantConvStore struct{ db *sql.DB }
@@ -26,8 +29,8 @@ const sqlNowTenantConv = `strftime('%s','now')`
 
 func (s *tenantConvStore) Create(ctx context.Context, tenantID int64, title string) (int64, error) {
 	const q = `
-		INSERT INTO tenant_conv (tenant_id, title, status, created_at, updated_at)
-		VALUES (?, ?, 'active', ` + sqlNowTenantConv + `, ` + sqlNowTenantConv + `)
+		INSERT INTO tenant_conv (tenant_id, title, total_tokens, model_id, model_provider, status, created_at, updated_at)
+		VALUES (?, ?, 0, '', '', 'active', ` + sqlNowTenantConv + `, ` + sqlNowTenantConv + `)
 		RETURNING conv_id;`
 	var id int64
 	if err := s.db.QueryRowContext(ctx, q, tenantID, title).Scan(&id); err != nil {
@@ -38,13 +41,13 @@ func (s *tenantConvStore) Create(ctx context.Context, tenantID int64, title stri
 
 func (s *tenantConvStore) GetByConvID(ctx context.Context, convID int64) (Conv, error) {
 	const q = `
-		SELECT conv_id, tenant_id, title, status, created_at, updated_at
+		SELECT conv_id, tenant_id, title, status, total_tokens, model_id, model_provider, created_at, updated_at
 		FROM tenant_conv
 		WHERE conv_id = ?;`
 	var c Conv
 	var created, updated int64
 	if err := s.db.QueryRowContext(ctx, q, convID).Scan(
-		&c.ID, &c.TenantID, &c.Title, &c.Status, &created, &updated,
+		&c.ID, &c.TenantID, &c.Title, &c.Status, &c.TotalTokens, &c.ModelID, &c.ModelProvider, &created, &updated,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Conv{}, fmt.Errorf("store: tenant_conv.GetByConvID %d: %w", convID, sql.ErrNoRows)
@@ -58,7 +61,7 @@ func (s *tenantConvStore) GetByConvID(ctx context.Context, convID int64) (Conv, 
 
 func (s *tenantConvStore) ListByTenant(ctx context.Context, tenantID int64) ([]Conv, error) {
 	return s.list(ctx, `
-		SELECT conv_id, tenant_id, title, status, created_at, updated_at
+		SELECT conv_id, tenant_id, title, status, total_tokens, model_id, model_provider, created_at, updated_at
 		FROM tenant_conv
 		WHERE tenant_id = ?
 		ORDER BY conv_id ASC;`, tenantID)
@@ -66,7 +69,7 @@ func (s *tenantConvStore) ListByTenant(ctx context.Context, tenantID int64) ([]C
 
 func (s *tenantConvStore) ListByTenantAndStatus(ctx context.Context, tenantID int64, status string) ([]Conv, error) {
 	return s.list(ctx, `
-		SELECT conv_id, tenant_id, title, status, created_at, updated_at
+		SELECT conv_id, tenant_id, title, status, total_tokens, model_id, model_provider, created_at, updated_at
 		FROM tenant_conv
 		WHERE tenant_id = ? AND status = ?
 		ORDER BY conv_id ASC;`, tenantID, status)
@@ -84,7 +87,7 @@ func (s *tenantConvStore) list(ctx context.Context, q string, args ...any) ([]Co
 		var c Conv
 		var created, updated int64
 		if err := rows.Scan(
-			&c.ID, &c.TenantID, &c.Title, &c.Status, &created, &updated,
+			&c.ID, &c.TenantID, &c.Title, &c.Status, &c.TotalTokens, &c.ModelID, &c.ModelProvider, &created, &updated,
 		); err != nil {
 			return nil, fmt.Errorf("store: tenant_conv.list scan: %w", err)
 		}
@@ -113,6 +116,72 @@ func (s *tenantConvStore) UpdateStatus(ctx context.Context, convID int64, status
 	}
 	if n == 0 {
 		return fmt.Errorf("store: tenant_conv.UpdateStatus %d: %w", convID, sql.ErrNoRows)
+	}
+	return nil
+}
+
+func (s *tenantConvStore) UpdateUsage(ctx context.Context, convID int64, totalTokens int64, modelID, modelProvider string) error {
+	const q = `
+		UPDATE tenant_conv
+		SET total_tokens = ?, model_id = ?, model_provider = ?, updated_at = ` + sqlNowTenantConv + `
+		WHERE conv_id = ?;`
+	res, err := s.db.ExecContext(ctx, q, totalTokens, modelID, modelProvider, convID)
+	if err != nil {
+		return fmt.Errorf("store: tenant_conv.UpdateUsage: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: tenant_conv.UpdateUsage rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("store: tenant_conv.UpdateUsage %d: %w", convID, sql.ErrNoRows)
+	}
+	return nil
+}
+
+// LatestActiveByTenant 返回指定租户下最后一个 status='active' 的 conv（按 conv_id DESC LIMIT 1）。
+// 无 active conv 时返回 sql.ErrNoRows。
+func (s *tenantConvStore) LatestActiveByTenant(ctx context.Context, tenantID int64) (Conv, error) {
+	const q = `
+		SELECT conv_id, tenant_id, title, status, total_tokens, model_id, model_provider, created_at, updated_at
+		FROM tenant_conv
+		WHERE tenant_id = ? AND status = 'active'
+		ORDER BY conv_id DESC
+		LIMIT 1;`
+	var c Conv
+	var created, updated int64
+	if err := s.db.QueryRowContext(ctx, q, tenantID).Scan(
+		&c.ID, &c.TenantID, &c.Title, &c.Status, &c.TotalTokens, &c.ModelID, &c.ModelProvider, &created, &updated,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Conv{}, fmt.Errorf("store: tenant_conv.LatestActiveByTenant %d: %w", tenantID, sql.ErrNoRows)
+		}
+		return Conv{}, fmt.Errorf("store: tenant_conv.LatestActiveByTenant: %w", err)
+	}
+	c.CreatedAt = time.Unix(created, 0).UTC()
+	c.UpdatedAt = time.Unix(updated, 0).UTC()
+	return c, nil
+}
+
+// IncUsage 原子累加 conv 的 total_tokens，并更新 model_id / model_provider 为最新值。
+func (s *tenantConvStore) IncUsage(ctx context.Context, convID int64, deltaTokens int64, modelID, modelProvider string) error {
+	const q = `
+		UPDATE tenant_conv
+		SET total_tokens   = total_tokens + ?,
+		    model_id       = ?,
+		    model_provider = ?,
+		    updated_at     = ` + sqlNowTenantConv + `
+		WHERE conv_id = ?;`
+	res, err := s.db.ExecContext(ctx, q, deltaTokens, modelID, modelProvider, convID)
+	if err != nil {
+		return fmt.Errorf("store: tenant_conv.IncUsage: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: tenant_conv.IncUsage rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("store: tenant_conv.IncUsage %d: %w", convID, sql.ErrNoRows)
 	}
 	return nil
 }

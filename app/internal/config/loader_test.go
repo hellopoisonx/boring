@@ -443,3 +443,57 @@ apiKey: from-file
 		t.Errorf("Model.ID = %q, want provider 默认", got)
 	}
 }
+
+// TestStorage_DSN_Default 验证 storage.dsn 默认空值。
+func TestStorage_DSN_Default(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(sampleYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loader, err := Load(path, Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	t.Cleanup(func() { _ = loader.Close() })
+	if got := loader.Viper().GetString("storage.dsn"); got != "" {
+		t.Errorf("storage.dsn = %q, want empty (default)", got)
+	}
+}
+
+// TestStorage_DSN_FromYAML 验证 yaml 的 storage.dsn 被解析。
+func TestStorage_DSN_FromYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	y := sampleYAML + "\nstorage:\n  dsn: file:boring.db\n"
+	if err := os.WriteFile(path, []byte(y), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loader, err := Load(path, Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	t.Cleanup(func() { _ = loader.Close() })
+	if got := loader.Viper().GetString("storage.dsn"); got != "file:boring.db" {
+		t.Errorf("storage.dsn = %q, want file:boring.db", got)
+	}
+}
+
+// TestStorage_DSN_EnvOverridesFile 验证 env 覆盖 yaml 的 storage.dsn。
+func TestStorage_DSN_EnvOverridesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	y := sampleYAML + "\nstorage:\n  dsn: file:from-yaml.db\n"
+	if err := os.WriteFile(path, []byte(y), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TESTDB_STORAGE_DSN", "file:from-env.db")
+	loader, err := Load(path, Options{EnvPrefix: "TESTDB"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	t.Cleanup(func() { _ = loader.Close() })
+	if got := loader.Viper().GetString("storage.dsn"); got != "file:from-env.db" {
+		t.Errorf("storage.dsn = %q, want file:from-env.db (env > file)", got)
+	}
+}

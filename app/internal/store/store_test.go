@@ -302,10 +302,20 @@ func TestConv_CreateAndGet(t *testing.T) {
 	if got.Status != store.ConvStatusActive {
 		t.Errorf("Status = %q, want %q", got.Status, store.ConvStatusActive)
 	}
+	if got.TotalTokens != 0 {
+		t.Errorf("TotalTokens = %d, want 0", got.TotalTokens)
+	}
+	if got.ModelID != "" {
+		t.Errorf("ModelID = %q, want empty", got.ModelID)
+	}
+	if got.ModelProvider != "" {
+		t.Errorf("ModelProvider = %q, want empty", got.ModelProvider)
+	}
 	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
 		t.Errorf("timestamps zero: %+v", got)
 	}
 }
+
 
 // 用例 11：Conv ListByTenant 数量、顺序（按 conv_id 升序）
 func TestConv_ListByTenant(t *testing.T) {
@@ -478,6 +488,130 @@ func TestConv_EmptyTitle(t *testing.T) {
 		t.Errorf("Title = %q, want empty", got.Title)
 	}
 }
+
+// 用例 16：UpdateUsage 写入后 GetByConvID 验证字段值
+func TestConv_UpdateUsage(t *testing.T) {
+	s := openMem(t)
+	ctx := context.Background()
+	ut, ti, convs := s.UserTenants(), s.TenantInfos(), s.Convs()
+
+	tid, _ := ut.Create(ctx, "alice")
+	if err := ti.Upsert(ctx, tid, json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	id, _ := convs.Create(ctx, tid, "x")
+
+	// 写入 usage
+	if err := convs.UpdateUsage(ctx, id, 12345, "gpt-4o", "openai"); err != nil {
+		t.Fatalf("UpdateUsage: %v", err)
+	}
+
+	got, err := convs.GetByConvID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetByConvID: %v", err)
+	}
+	if got.TotalTokens != 12345 {
+		t.Errorf("TotalTokens = %d, want 12345", got.TotalTokens)
+	}
+	if got.ModelID != "gpt-4o" {
+		t.Errorf("ModelID = %q, want gpt-4o", got.ModelID)
+	}
+	if got.ModelProvider != "openai" {
+		t.Errorf("ModelProvider = %q, want openai", got.ModelProvider)
+	}
+}
+
+// 用例 17：LatestActiveByTenant — 取最后 active conv；无 active 时返回 ErrNoRows
+func TestConv_LatestActiveByTenant(t *testing.T) {
+	s := openMem(t)
+	ctx := context.Background()
+	ut, ti, convs := s.UserTenants(), s.TenantInfos(), s.Convs()
+
+	tid, _ := ut.Create(ctx, "alice")
+	if err := ti.Upsert(ctx, tid, json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// 无 active conv → ErrNoRows
+	_, err := convs.LatestActiveByTenant(ctx, tid)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("期望 ErrNoRows，实际: %v", err)
+	}
+
+	// 建 3 条，把第 2 条 archive
+	ids := make([]int64, 3)
+	for i := range 3 {
+		ids[i], _ = convs.Create(ctx, tid, "x")
+	}
+	if err := convs.UpdateStatus(ctx, ids[1], store.ConvStatusArchived); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+
+	// 应返回 conv_id 最大的 active 行（ids[2]）
+	got, err := convs.LatestActiveByTenant(ctx, tid)
+	if err != nil {
+		t.Fatalf("LatestActiveByTenant: %v", err)
+	}
+	if got.ID != ids[2] {
+		t.Errorf("LatestActiveByTenant conv_id = %d, want %d", got.ID, ids[2])
+	}
+
+	// 把 ids[2] 也 archive → 应回退到 ids[0]
+	if err := convs.UpdateStatus(ctx, ids[2], store.ConvStatusArchived); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+	got, err = convs.LatestActiveByTenant(ctx, tid)
+	if err != nil {
+		t.Fatalf("LatestActiveByTenant after archive: %v", err)
+	}
+	if got.ID != ids[0] {
+		t.Errorf("LatestActiveByTenant after archive conv_id = %d, want %d", got.ID, ids[0])
+	}
+}
+
+// 用例 18：IncUsage 累加 total_tokens，model_id / model_provider 被最新值覆盖
+func TestConv_IncUsage(t *testing.T) {
+	s := openMem(t)
+	ctx := context.Background()
+	ut, ti, convs := s.UserTenants(), s.TenantInfos(), s.Convs()
+
+	tid, _ := ut.Create(ctx, "alice")
+	if err := ti.Upsert(ctx, tid, json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	id, _ := convs.Create(ctx, tid, "x")
+
+	// 第一次累加
+	if err := convs.IncUsage(ctx, id, 100, "gpt-4o", "openai"); err != nil {
+		t.Fatalf("IncUsage #1: %v", err)
+	}
+	got, _ := convs.GetByConvID(ctx, id)
+	if got.TotalTokens != 100 {
+		t.Errorf("第1次后 TotalTokens = %d, want 100", got.TotalTokens)
+	}
+	if got.ModelID != "gpt-4o" {
+		t.Errorf("第1次后 ModelID = %q, want gpt-4o", got.ModelID)
+	}
+	if got.ModelProvider != "openai" {
+		t.Errorf("第1次后 ModelProvider = %q, want openai", got.ModelProvider)
+	}
+
+	// 第二次累加，model 改成别的
+	if err := convs.IncUsage(ctx, id, 250, "claude-3", "anthropic"); err != nil {
+		t.Fatalf("IncUsage #2: %v", err)
+	}
+	got, _ = convs.GetByConvID(ctx, id)
+	if got.TotalTokens != 350 {
+		t.Errorf("第2次后 TotalTokens = %d, want 350", got.TotalTokens)
+	}
+	if got.ModelID != "claude-3" {
+		t.Errorf("第2次后 ModelID = %q, want claude-3", got.ModelID)
+	}
+	if got.ModelProvider != "anthropic" {
+		t.Errorf("第2次后 ModelProvider = %q, want anthropic", got.ModelProvider)
+	}
+}
+
 
 // 错误 sql.ErrNoRows 上抛：避免业务侧自己 unwrap
 func TestErrors_NotWrapped(t *testing.T) {

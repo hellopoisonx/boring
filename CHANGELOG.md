@@ -6,12 +6,45 @@
 
 ## [未发布]
 
+### 新增
+
+- **CLI 接入租户隔离与用量统计** (`app/cmd/chat/chat.go` + `app/internal/store/`)
+  - `chat` CLI 新增 `--profile` flag（必填，直当 `user_tenant.user_id`），启动时解析 profile → tenant_id → conv_id
+  - 同 profile 下复用最后一个 `status='active'` 的 conv；不存在则自动 Create
+  - 每轮 LLM 响应结束后立即通过 `IncUsage` 将 token 用量原子累加到当前 `tenant_conv`
+  - DB 路径 `--db` flag > env `BORING_DB` > `config.yaml` `storage.dsn` > 默认 `./boring.db`
+  - `config` 包新增 `StorageConfig` 类型；loader 新增 `storage.dsn` 解析与 env / flag 绑定
+  - `TenantConvStore` 接口新增 `LatestActiveByTenant` / `IncUsage` 方法
+  - 配套测试：`TestConv_LatestActiveByTenant` / `TestConv_IncUsage` / `TestStorage_DSN_*` (3 个)
+  - `defaultTemplateYAML` 新增 `storage` 段
+
+- **tenant_conv 表新增 usage 字段** (`app/internal/store/`)
+  - `tenant_conv` 表新增 `total_tokens INTEGER NOT NULL DEFAULT 0`、`model_id VARCHAR(255) NOT NULL DEFAULT ''`、`model_provider VARCHAR(64) NOT NULL DEFAULT ''` 三列
+  - `Conv` 领域类型新增 `TotalTokens` / `ModelID` / `ModelProvider` 字段
+  - `TenantConvStore` 接口新增 `UpdateUsage(ctx, convID, totalTokens, modelID, modelProvider) error` 方法，用于 LLM 调用结束后回写用量与模型信息
+  - 配套测试新增 `TestConv_UpdateUsage`，已有 Conv 用例补齐新字段默认值断言
+
+- **chat agent 新增同一会话内的上下文** (`app/internal/agent/chat.go`)
+  - `Chat` 结构体新增 `history []llm.Message` 字段，同一实例内自动维护会话历史
+  - `Reply`：调用成功后将本轮 user 消息与 assistant 回复追加到 history，下次调用时作为 `GenerateRequest.History` 传入
+  - `ReplyStream`：通过 `streamHistoryCollector` 包装 `AsyncReader`，在 finish chunk 到达时收集完整 assistant 文本并追加
+  - 约束：不加锁（调用方保证单 goroutine 使用），不提供 ClearHistory / 条数上限等管理方法
+  - 配套测试新增 `TestChat_Reply_MultiTurn` / `TestChat_Reply_ErrorNotAppendHistory` / `TestChat_ReplyStream_MultiTurn`
+  - 文档更新：AGENTS.md §2.8 从"单轮 chat agent"改为"chat agent"，§6 约束从"无状态原则"改为"会话历史"
+- **CLI 新增交互式多轮对话入口** (`app/cmd/chat/chat.go`)
+  - `--prompt` 留空时自动进入交互式多轮对话模式，同一 `Chat` 实例自动维护会话历史
+  - 从 stdin 逐行读取输入，空行跳过，`/exit` / `/quit` 或 Ctrl+D 退出
+  - 支持 `--stream` 流式输出（逐 token 打印）
+  - 每轮错误打印到 stderr，不中断循环；usage 信息打印到 stderr
+
 ### 修复
 
 - **OpenAI Chat 流式路径丢失 usage 信息**
   - `sdk.OpenAIChat.consumeStream` 原先只捕获 `FinishReason`，忽略了 chunk 中的 `Usage` 字段
   - 在流式循环中新增 usage 提取逻辑：当 `chunk.Usage.TotalTokens > 0` 时赋值给 `lastUsage`
   - 修复后 `runStream` 可正常输出 `[usage] prompt=... completion=... total=...`
+
+### 新增
 
 ### 新增
 

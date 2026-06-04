@@ -20,15 +20,19 @@ CREATE TABLE IF NOT EXISTS tenant_info (
 -- 3) 租户-会话表（一个租户可拥有多个会话）
 --    引用 tenant_info 而非 user_tenant：保证"有 info 才有 conv"的不变量。
 CREATE TABLE IF NOT EXISTS tenant_conv (
-    conv_id    INTEGER PRIMARY KEY,
-    tenant_id  INTEGER      NOT NULL,
-    title      VARCHAR(255) NOT NULL DEFAULT '',
-    status     VARCHAR(16)  NOT NULL DEFAULT 'active'
-               CHECK (status IN ('active','archived','deleted')),
-    created_at INTEGER      NOT NULL,
-    updated_at INTEGER      NOT NULL,
+    conv_id        INTEGER PRIMARY KEY,
+    tenant_id      INTEGER      NOT NULL,
+    title          VARCHAR(255) NOT NULL DEFAULT '',
+    status         VARCHAR(16)  NOT NULL DEFAULT 'active'
+                   CHECK (status IN ('active','archived','deleted')),
+    total_tokens   INTEGER      NOT NULL DEFAULT 0,
+    model_id       VARCHAR(255) NOT NULL DEFAULT '',
+    model_provider VARCHAR(64)  NOT NULL DEFAULT '',
+    created_at     INTEGER      NOT NULL,
+    updated_at     INTEGER      NOT NULL,
     FOREIGN KEY (tenant_id) REFERENCES tenant_info(tenant_id) ON DELETE CASCADE
 );
+
 
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_tenant_conv_tenant
