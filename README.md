@@ -15,5 +15,5 @@
 
 ## 数据存储
 
-- 用户数据: [sqlite](https://github.com/ncruces/go-sqlite3) — 三表 `user_tenant` / `tenant_info` / `tenant_conv`，详见 [`app/internal/store/schema.sql`](./app/internal/store/schema.sql) 与 [`plans/db-schema-v1.md`](./plans/db-schema-v1.md)。CLI 已接入：`--profile` 自动创建或复用租户及会话。
+- 用户数据: [sqlite](https://github.com/ncruces/go-sqlite3) — 三表 `user_tenant` / `tenant_info` / `tenant_conv`，DDL 在 [`app/internal/store/schema.sql`](./app/internal/store/schema.sql)，设计在 [`plans/db-schema-v1.md`](./plans/db-schema-v1.md)。**SQL 包装由 [sqlc](https://github.com/sqlc-dev/sqlc) 生成**（仓库根 `sqlc.yaml` + [`app/internal/store/queries/`](./app/internal/store/queries/)），用法见 [`app/internal/store/README.md`](./app/internal/store/README.md)。CLI 已接入：`--profile` 自动创建或复用租户及会话。
 - 向量数据库: [chromem-go](https://github.com/philippgille/chromem-go)

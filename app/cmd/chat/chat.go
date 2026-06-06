@@ -23,7 +23,6 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -47,7 +46,7 @@ type chatEnv struct {
 	convID        int64
 	modelID       string
 	modelProvider string
-	convs         store.TenantConvStore
+	queries       *store.Queries
 }
 
 // persistUsage 把一轮 chat 的 token 用量累加到当前 conv。
@@ -56,7 +55,12 @@ func (e *chatEnv) persistUsage(ctx context.Context, usage *llm.Usage) {
 	if usage == nil || usage.TotalTokens == 0 {
 		return
 	}
-	if err := e.convs.IncUsage(ctx, e.convID, int64(usage.TotalTokens), e.modelID, e.modelProvider); err != nil {
+	if err := e.queries.IncTenantConvUsage(ctx, store.IncTenantConvUsageParams{
+		ConvID:        e.convID,
+		TotalTokens:   int64(usage.TotalTokens),
+		ModelID:       e.modelID,
+		ModelProvider: e.modelProvider,
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "[warn] persist usage: %v\n", err)
 	}
 }
@@ -129,15 +133,16 @@ func run() error {
 	}
 	defer func() { _ = st.Close() }()
 
-	ut, ti, convs := st.UserTenants(), st.TenantInfos(), st.Convs()
-
-	tid, err := ut.GetByUserID(ctx, *profile)
+	tid, err := st.GetUserTenantByUserID(ctx, *profile)
 	if errors.Is(err, sql.ErrNoRows) {
-		tid, err = ut.Create(ctx, *profile)
+		tid, err = st.CreateUserTenant(ctx, *profile)
 		if err != nil {
 			return fmt.Errorf("create tenant for %q: %w", *profile, err)
 		}
-		if err := ti.Upsert(ctx, tid, json.RawMessage(`{}`)); err != nil {
+		if err := st.UpsertTenantInfo(ctx, store.UpsertTenantInfoParams{
+			TenantID: tid,
+			Info:     "{}",
+		}); err != nil {
 			return fmt.Errorf("upsert tenant_info for %q: %w", *profile, err)
 		}
 	} else if err != nil {
@@ -145,27 +150,30 @@ func run() error {
 	}
 
 	// ── 复用或新建 conv ──
-	conv, err := convs.LatestActiveByTenant(ctx, tid)
+	conv, err := st.GetLatestActiveTenantConv(ctx, tid)
 	if errors.Is(err, sql.ErrNoRows) {
 		title := fmt.Sprintf("%s @ %s", *profile, time.Now().Format(time.RFC3339))
-		newID, err := convs.Create(ctx, tid, title)
+		newID, err := st.CreateTenantConv(ctx, store.CreateTenantConvParams{
+			TenantID: tid,
+			Title:    title,
+		})
 		if err != nil {
 			return fmt.Errorf("create conv: %w", err)
 		}
-		conv.ID = newID
+		conv.ConvID = newID
 	} else if err != nil {
 		return fmt.Errorf("lookup latest conv: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "[conv] tenant_id=%d conv_id=%d\n", tid, conv.ID)
+	fmt.Fprintf(os.Stderr, "[conv] tenant_id=%d conv_id=%d\n", tid, conv.ConvID)
 
 	// ── 模型信息 ──
 	cfg := loader.Config()
 	env := &chatEnv{
-		convID:        conv.ID,
+		convID:        conv.ConvID,
 		modelID:       cfg.Model.ID,
 		modelProvider: string(cfg.Provider),
-		convs:         convs,
+		queries:       st.Queries,
 	}
 
 	// ── LLM ──

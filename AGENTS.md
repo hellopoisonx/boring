@@ -73,12 +73,19 @@
   - `StorageConfig`：本地持久化配置（SQLite DSN），三层优先级同 LLM 配置
 - viper 配置加载器（flag/env/file 三层优先级 + fsnotify 热加载）→
   [`app/internal/config/loader.go`](./app/internal/config/loader.go)
-### 2.6 持久化层
-- `*Store` / `Open` / 三表 DDL → [`app/internal/store/store.go`](./app/internal/store/store.go) + [`schema.sql`](./app/internal/store/schema.sql)
-- `UserTenantStore` / `Create` / `GetByUserID` / `GetByTenantID` → [`app/internal/store/user_tenant.go`](./app/internal/store/user_tenant.go)
-- `TenantInfoStore` / `Upsert` / `GetByTenantID` / `Update` → [`app/internal/store/tenant_info.go`](./app/internal/store/tenant_info.go)
-- `TenantConvStore` / `Create` / `ListByTenant` / `ListByTenantAndStatus` / `LatestActiveByTenant` / `UpdateStatus` / `UpdateUsage` / `IncUsage` → [`app/internal/store/tenant_conv.go`](./app/internal/store/tenant_conv.go)
-- `Conv` 领域类型 + 状态枚举 → [`app/internal/store/model.go`](./app/internal/store/model.go)
+### 2.6 持久化层（sqlc 生成）
+- sqlc 配置文件（engine: sqlite, package: store）→ 仓库根 [`sqlc.yaml`](./sqlc.yaml)
+- 三表 DDL（被 embed 进 `Open`）→ [`app/internal/store/schema.sql`](./app/internal/store/schema.sql)
+- sqlc 源查询（手写注释 + SQL，按表拆）→ [`app/internal/store/queries/`](./app/internal/store/queries/)
+  - `user_tenant.sql` / `tenant_info.sql` / `tenant_conv.sql`
+- sqlc 生成产物（提交到 git，禁手改）→ `app/internal/store/`
+  - `models.go`（行模型 `UserTenant` / `TenantInfo` / `TenantConv`）
+  - `db.go`（`DBTX` / `Queries` / `WithTx`）
+  - `user_tenant.sql.go` / `tenant_info.sql.go` / `tenant_conv.sql.go`（查询方法）
+- 手写代码 → [`app/internal/store/store.go`](./app/internal/store/store.go) + [`model.go`](./app/internal/store/model.go)
+  - `*Store` 嵌入 `*Queries`，调用方可直接 `st.CreateUserTenant(...)` / `st.GetTenantConv(...)`
+  - `model.go` 仅放 `ConvStatus*` 状态常量（sqlc 不生成 CHECK 约束的 Go 常量）
+- sqlc 工作流 / 用法 / 已知限制 → [`app/internal/store/README.md`](./app/internal/store/README.md)
 - 设计与决策记录 → [`plans/db-schema-v1.md`](./plans/db-schema-v1.md)
 
 ### 2.7 入口
@@ -164,3 +171,4 @@
 ## 7. 沟通语言
 
 简体中文。与 [`README.md`](./README.md)、
+

@@ -1,0 +1,18 @@
+version: "2"
+sql:
+  - engine: "sqlite"
+    queries: "app/internal/store/queries"
+    schema: "app/internal/store/schema.sql"
+    gen:
+      go:
+        package: "store"
+        out: "app/internal/store"
+        sql_package: "database/sql"
+        emit_interface: false
+        emit_empty_slices: true
+        emit_pointers_for_null_types: false
+        emit_json_tags: false
+        emit_db_tags: false
+        emit_prepared_queries: false
+        emit_result_struct_pointers: false
+        emit_methods_with_db_argument: false

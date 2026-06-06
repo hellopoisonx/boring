@@ -1,11 +1,19 @@
-// Package store 提供 SQLite 持久化层：租户与会话三表 + 最小 DAO。
+// Package store 提供 SQLite 持久化层：租户与会话三表 + sqlc 生成的查询。
 //
 // 设计要点：
 //   - 三表链路：user_tenant (分配 tenant_id) → tenant_info (1:1 持有元数据)
 //     → tenant_conv (1:N 持有会话)。仅 tenant_conv.tenant_id 建 DB 层 FK。
 //   - tenant_id 统一 INTEGER PRIMARY KEY（= SQLite rowid，64-bit）。
-//   - 时间戳统一 unix epoch seconds（INTEGER）。
+//   - 时间戳统一 unix epoch seconds（INTEGER），Go 端用 int64 表示。
+//   - SQL 由 sqlc 生成（见仓库根 sqlc.yaml + app/internal/store/queries/*.sql）；
+//     本文件不写任何业务 SQL。
 //   - Open 时幂等建表并启用 PRAGMA foreign_keys=ON。
+//
+// 行模型与查询：
+//   - 行模型：UserTenant / TenantInfo / TenantConv（见 models.go，sqlc 生成）
+//   - 查询方法：*Queries 上的方法（见 *.sql.go，sqlc 生成）
+//   - *Queries 通过 New(*sql.DB) 构造；Store 嵌入 *Queries 后调用方可直接
+//     s.CreateUserTenant(...) / s.GetTenantConv(...) 调用。
 package store
 
 import (
@@ -20,8 +28,12 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-// Store 持有底层 *sql.DB 并对外暴露各表的 DAO 工厂。
+// Store 持有底层 *sql.DB 并通过嵌入 *Queries 直接暴露所有 sqlc 生成的方法。
+//
+// 调用方既可以 s.CreateUserTenant(...)（走嵌入字段），
+// 也可以 s.DB().Exec(...) 自定义 SQL，或 s.WithTx(tx) 在事务里跑 sqlc 查询。
 type Store struct {
+	*Queries
 	db *sql.DB
 }
 
@@ -69,21 +81,12 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("store: apply schema: %w", err)
 	}
 
-	return &Store{db: db}, nil
+	return &Store{Queries: New(db), db: db}, nil
 }
 
 // DB 暴露底层 *sql.DB，给需要自定义 SQL / 事务的调用方。
-// 大多数调用方应使用 UserTenants / TenantInfos / Convs 工厂。
+// 大多数调用方应直接使用嵌入的 *Queries 方法。
 func (s *Store) DB() *sql.DB { return s.db }
 
 // Close 关闭底层连接。多次调用安全（database/sql 保证幂等）。
 func (s *Store) Close() error { return s.db.Close() }
-
-// UserTenants 返回 user_tenant 表的 DAO。
-func (s *Store) UserTenants() UserTenantStore { return &userTenantStore{db: s.db} }
-
-// TenantInfos 返回 tenant_info 表的 DAO。
-func (s *Store) TenantInfos() TenantInfoStore { return &tenantInfoStore{db: s.db} }
-
-// Convs 返回 tenant_conv 表的 DAO。
-func (s *Store) Convs() TenantConvStore { return &tenantConvStore{db: s.db} }
